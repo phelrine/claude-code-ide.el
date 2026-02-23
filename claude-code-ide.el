@@ -95,6 +95,34 @@
   :group 'tools
   :prefix "claude-code-ide-")
 
+;;; Session Structure
+
+(cl-defstruct claude-code-ide-session
+  "Unified structure holding all state for a single Claude Code session.
+Replaces the former separate `claude-code-ide-mcp-session' struct
+and the directory-keyed process/session-id hash tables."
+  session-id        ; unique identifier, e.g. "claude-project-20260223-143000"
+  name              ; user-facing display name (e.g. "design"), nil for default
+  directory         ; expanded project root path
+  ;; Process & buffer
+  process           ; terminal process
+  buffer            ; terminal buffer
+  ;; MCP state
+  port              ; WebSocket server port
+  server            ; WebSocket server object
+  client            ; connected WebSocket client
+  ping-timer        ; keepalive timer
+  selection-timer   ; selection change debounce timer
+  last-selection    ; last selection state for change detection
+  last-buffer       ; last active buffer for change detection
+  deferred          ; hash-table of deferred responses
+  active-diffs      ; hash-table of active ediff sessions
+  original-tab)     ; tab-bar tab where session was started
+
+(defvar claude-code-ide--sessions (make-hash-table :test 'equal)
+  "Hash table mapping session-id to `claude-code-ide-session' structs.
+This is the single source of truth for all active sessions.")
+
 (defcustom claude-code-ide-cli-path "claude"
   "Path to the Claude Code CLI executable."
   :type 'string
@@ -283,10 +311,12 @@ a more stable viewing experience when working with multiple windows."
   "Whether Claude Code CLI is available and detected.")
 
 (defvar claude-code-ide--processes (make-hash-table :test 'equal)
-  "Hash table mapping project/directory roots to their Claude Code processes.")
+  "Hash table mapping project/directory roots to their Claude Code processes.
+Deprecated: will be removed after migration to `claude-code-ide--sessions'.")
 
 (defvar claude-code-ide--session-ids (make-hash-table :test 'equal)
-  "Hash table mapping project/directory roots to their session IDs.")
+  "Hash table mapping project/directory roots to their session IDs.
+Deprecated: will be removed after migration to `claude-code-ide--sessions'.")
 
 (defvar claude-code-ide--last-accessed-buffer nil
   "The most recently accessed Claude Code buffer.")

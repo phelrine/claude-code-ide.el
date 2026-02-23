@@ -211,6 +211,31 @@ have completed before cleanup.  Waits up to 5 seconds."
         (sleep-for 0.1)
         (setq max-wait (1- max-wait))))))
 
+;;; Tests for Session Struct and Hash Table
+
+(ert-deftest claude-code-ide-test-session-struct ()
+  "Test the unified session struct."
+  (let ((session (make-claude-code-ide-session
+                  :session-id "test-session-1"
+                  :name "design"
+                  :directory "/tmp/test-project/")))
+    (should (equal (claude-code-ide-session-session-id session) "test-session-1"))
+    (should (equal (claude-code-ide-session-name session) "design"))
+    (should (equal (claude-code-ide-session-directory session) "/tmp/test-project/"))
+    (should (null (claude-code-ide-session-process session)))
+    (should (null (claude-code-ide-session-buffer session)))
+    (should (null (claude-code-ide-session-port session)))))
+
+(ert-deftest claude-code-ide-test-sessions-hash-table ()
+  "Test the global sessions hash table."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (should (= 0 (hash-table-count claude-code-ide--sessions)))
+    (puthash "session-1"
+             (make-claude-code-ide-session :session-id "session-1" :directory "/tmp/proj/")
+             claude-code-ide--sessions)
+    (should (= 1 (hash-table-count claude-code-ide--sessions)))
+    (should (claude-code-ide-session-p (gethash "session-1" claude-code-ide--sessions)))))
+
 ;;; Tests for Helper Functions
 
 (ert-deftest claude-code-ide-test-default-buffer-name ()
