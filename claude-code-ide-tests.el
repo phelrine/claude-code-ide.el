@@ -223,6 +223,27 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (null (claude-code-ide-session-buffer session)))
     (should (null (claude-code-ide-session-port session)))))
 
+(ert-deftest claude-code-ide-test-session-status-fields ()
+  "Test that session struct has status tracking fields."
+  (let ((session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/"
+                  :status 'active
+                  :last-message "Reading file"
+                  :status-updated-at 1000.0)))
+    (should (eq (claude-code-ide-session-status session) 'active))
+    (should (equal (claude-code-ide-session-last-message session) "Reading file"))
+    (should (= (claude-code-ide-session-status-updated-at session) 1000.0))))
+
+(ert-deftest claude-code-ide-test-session-status-defaults ()
+  "Test default values for status fields."
+  (let ((session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/")))
+    (should (eq (claude-code-ide-session-status session) 'active))
+    (should (null (claude-code-ide-session-last-message session)))
+    (should (null (claude-code-ide-session-status-updated-at session)))))
+
 (ert-deftest claude-code-ide-test-sessions-hash-table ()
   "Test the global sessions hash table."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
@@ -2554,6 +2575,232 @@ have completed before cleanup.  Waits up to 5 seconds."
       (should found)
       (should (equal "s1" (claude-code-ide-session-session-id found))))
     (should (null (claude-code-ide-mcp--find-session-by-websocket 'other-ws)))))
+
+(ert-deftest claude-code-ide-test-handle-status-changed ()
+  "Test handling session/statusChanged notification with direct session."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/"
+                  :status 'active)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Pass session directly (new signature)
+    (claude-code-ide-mcp--handle-status-changed
+     '((status . "idle")
+       (message . "Done fixing the bug"))
+     session)
+    (should (eq (claude-code-ide-session-status session) 'idle))
+    (should (equal (claude-code-ide-session-last-message session) "Done fixing the bug"))
+    (should (claude-code-ide-session-status-updated-at session))))
+
+(ert-deftest claude-code-ide-test-handle-status-changed-nil-session ()
+  "Test that statusChanged with nil session and no session_id is ignored."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    ;; Should not error when session is nil and no session_id in params
+    (claude-code-ide-mcp--handle-status-changed
+     '((status . "idle")
+       (message . "test"))
+     nil)))
+
+(ert-deftest claude-code-ide-test-handle-status-changed-backward-compat ()
+  "Test backward-compatible session_id lookup when no session passed."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/"
+                  :status 'active)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Old-style call: no session param, session_id in params
+    (claude-code-ide-mcp--handle-status-changed
+     '((session_id . "s1")
+       (status . "idle")
+       (message . "fallback")))
+    (should (eq (claude-code-ide-session-status session) 'idle))
+    (should (equal (claude-code-ide-session-last-message session) "fallback"))))
+
+;;; Dashboard Tests
+
+(require 'claude-code-ide-dashboard)
+
+(ert-deftest claude-code-ide-test-dashboard-entries ()
+  "Test that dashboard generates correct tabulated-list entries."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1"
+                   :name "design"
+                   :directory "/tmp/my-project/"
+                   :status 'idle
+                   :last-message "Fixed the bug")
+             claude-code-ide--sessions)
+    (puthash "s2" (make-claude-code-ide-session
+                   :session-id "s2"
+                   :name "coding"
+                   :directory "/tmp/my-project/"
+                   :status 'active
+                   :last-message "Edit main.py")
+             claude-code-ide--sessions)
+    ;; Mock cleanup so it doesn't remove process-less test sessions
+    (cl-letf (((symbol-function 'claude-code-ide--cleanup-dead-sessions)
+               (lambda () nil)))
+      (let ((entries (claude-code-ide-dashboard--entries)))
+        (should (= 2 (length entries)))
+        ;; Each entry is (ID [NAME DIR STATUS LAST-MESSAGE])
+        (let* ((entry (car entries))
+               (cols (cadr entry)))
+          (should (stringp (aref cols 0)))  ; name
+          (should (stringp (aref cols 1)))  ; directory
+          (should (stringp (aref cols 2)))  ; status
+          (should (stringp (aref cols 3))))))))  ; last-message
+
+(ert-deftest claude-code-ide-test-dashboard-entries-empty ()
+  "Test that dashboard returns empty list with no sessions."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'claude-code-ide--cleanup-dead-sessions)
+               (lambda () nil)))
+      (let ((entries (claude-code-ide-dashboard--entries)))
+        (should (= 0 (length entries)))))))
+
+(ert-deftest claude-code-ide-test-dashboard-entries-fallback-name ()
+  "Test that dashboard uses session-id as name fallback."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1"
+                   :name nil
+                   :directory "/tmp/proj/"
+                   :status 'active
+                   :last-message nil)
+             claude-code-ide--sessions)
+    (cl-letf (((symbol-function 'claude-code-ide--cleanup-dead-sessions)
+               (lambda () nil)))
+      (let* ((entries (claude-code-ide-dashboard--entries))
+             (cols (cadr (car entries))))
+        ;; Name falls back to session-id
+        (should (equal "s1" (aref cols 0)))
+        ;; Last-message falls back to empty string
+        (should (equal "" (aref cols 3)))))))
+
+;;; Session Lookup Helper Tests
+
+(ert-deftest claude-code-ide-test-find-session-by-port ()
+  "Test finding session by MCP server port."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1" :port 12345 :directory "/tmp/proj/")
+             claude-code-ide--sessions)
+    (puthash "s2" (make-claude-code-ide-session
+                   :session-id "s2" :port 54321 :directory "/tmp/other/")
+             claude-code-ide--sessions)
+    (let ((found (claude-code-ide-mcp--find-session-by-port 12345)))
+      (should found)
+      (should (equal "s1" (claude-code-ide-session-session-id found))))
+    (let ((found (claude-code-ide-mcp--find-session-by-port 54321)))
+      (should found)
+      (should (equal "s2" (claude-code-ide-session-session-id found))))
+    (should (null (claude-code-ide-mcp--find-session-by-port 99999)))))
+
+(ert-deftest claude-code-ide-test-extract-ws-port ()
+  "Test extracting port from WebSocket string representation."
+  ;; Valid format
+  (should (= 12345
+             (claude-code-ide-mcp--extract-ws-port
+              "websocket server on port 12345 <127.0.0.1:54321>")))
+  ;; No port
+  (should (null (claude-code-ide-mcp--extract-ws-port "no-port-here"))))
+
+;;; Status Hook Setup Tests
+
+(ert-deftest claude-code-ide-test-package-scripts-dir ()
+  "Test that package-scripts-dir returns the scripts/ directory."
+  (let ((scripts-dir (claude-code-ide--package-scripts-dir)))
+    (should (stringp scripts-dir))
+    (should (string-suffix-p "scripts/" scripts-dir))))
+
+(ert-deftest claude-code-ide-test-setup-status-hooks ()
+  "Test that setup-status-hooks copies script and merges settings."
+  (let* ((tmpdir (make-temp-file "claude-test-" t))
+         (hooks-dir (expand-file-name "hooks/" tmpdir))
+         (settings-file (expand-file-name "settings.json" tmpdir)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'expand-file-name)
+                   (let ((orig (symbol-function 'expand-file-name)))
+                     (lambda (name &optional dir)
+                       (cond
+                        ((equal name "~/.claude/hooks/") hooks-dir)
+                        ((equal name "~/.claude/settings.json") settings-file)
+                        (t (funcall orig name dir)))))))
+          ;; Run setup
+          (claude-code-ide-setup-status-hooks)
+          ;; Verify script was copied
+          (should (file-exists-p (expand-file-name "status-notify.py" hooks-dir)))
+          ;; Verify settings file was created with hooks
+          (should (file-exists-p settings-file))
+          (let* ((config (with-temp-buffer
+                           (insert-file-contents settings-file)
+                           (json-read)))
+                 (hooks (alist-get 'hooks config)))
+            (should (alist-get 'Stop hooks))
+            (should (alist-get 'PreToolUse hooks))
+            (should (alist-get 'PostToolUse hooks))
+            (should (alist-get 'UserPromptSubmit hooks)))
+          ;; Run again -- idempotent (should not error or duplicate)
+          (claude-code-ide-setup-status-hooks)
+          (let* ((config (with-temp-buffer
+                           (insert-file-contents settings-file)
+                           (json-read)))
+                 (hooks (alist-get 'hooks config))
+                 (stop-hooks (alist-get 'Stop hooks)))
+            ;; Should still have exactly one hook-group per event
+            (should (= 1 (length stop-hooks)))))
+      (delete-directory tmpdir t))))
+
+;;; Integration Tests
+
+(ert-deftest claude-code-ide-test-dashboard-mode ()
+  "Test that dashboard mode initializes correctly."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1" :name "test"
+                   :directory "/tmp/proj/" :status 'idle
+                   :last-message "Done")
+             claude-code-ide--sessions)
+    (cl-letf (((symbol-function 'claude-code-ide--cleanup-dead-sessions)
+               (lambda () nil)))
+      (with-temp-buffer
+        (claude-code-ide-dashboard-mode)
+        (tabulated-list-print)
+        ;; Verify header exists
+        (should tabulated-list-format)
+        ;; Verify entries
+        (should (= 1 (length (funcall tabulated-list-entries))))))))
+
+(ert-deftest claude-code-ide-test-status-lifecycle ()
+  "Test full status update lifecycle."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    ;; Create session (starts as active)
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1"
+                   :directory "/tmp/proj/")
+             claude-code-ide--sessions)
+    (let ((session (gethash "s1" claude-code-ide--sessions)))
+      (should (eq (claude-code-ide-session-status session) 'active))
+      ;; Simulate Stop hook -> idle (pass session directly)
+      (claude-code-ide-mcp--handle-status-changed
+       '((status . "idle") (message . "All done"))
+       session)
+      (should (eq (claude-code-ide-session-status session) 'idle))
+      (should (equal (claude-code-ide-session-last-message session) "All done"))
+      ;; Simulate PreToolUse hook -> idle (permission prompt)
+      (claude-code-ide-mcp--handle-status-changed
+       '((status . "idle") (message . "Edit"))
+       session)
+      (should (eq (claude-code-ide-session-status session) 'idle))
+      (should (equal (claude-code-ide-session-last-message session) "Edit"))
+      ;; Simulate PostToolUse hook -> active (tool executing)
+      (claude-code-ide-mcp--handle-status-changed
+       '((status . "active") (message . "Edit"))
+       session)
+      (should (eq (claude-code-ide-session-status session) 'active))
+      (should (equal (claude-code-ide-session-last-message session) "Edit")))))
 
 (provide 'claude-code-ide-tests)
 

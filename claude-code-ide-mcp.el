@@ -146,6 +146,28 @@ This is a convenience function that combines
              claude-code-ide--sessions)
     found))
 
+(defun claude-code-ide-mcp--find-session-by-port (port)
+  "Find the session listening on PORT."
+  (let ((found nil))
+    (maphash (lambda (_id session)
+               (when (eq (claude-code-ide-session-port session) port)
+                 (setq found session)))
+             claude-code-ide--sessions)
+    found))
+
+(defun claude-code-ide-mcp--extract-ws-port (ws)
+  "Extract the server port from WebSocket WS string representation.
+Returns the port number or nil."
+  (let ((ws-string (format "%s" ws)))
+    (when (string-match "on port \\([0-9]+\\)" ws-string)
+      (string-to-number (match-string 1 ws-string)))))
+
+(defun claude-code-ide-mcp--find-session-by-ws-port (ws)
+  "Find the session that owns the server behind WebSocket WS.
+Extracts port from the WS string representation and looks up the session."
+  (when-let ((port (claude-code-ide-mcp--extract-ws-port ws)))
+    (claude-code-ide-mcp--find-session-by-port port)))
+
 (defun claude-code-ide-mcp--active-sessions ()
   "Return a list of all active MCP sessions."
   (let ((sessions '()))
@@ -377,6 +399,29 @@ Optional SESSION contains the MCP session context."
         (claude-code-ide-mcp--make-error-response
          id -32601 (format "Unknown tool: %s" tool-name))))))
 
+(defvar claude-code-ide-dashboard-buffer-name)
+
+(defun claude-code-ide-mcp--handle-status-changed (params &optional session)
+  "Handle a session/statusChanged notification with PARAMS.
+PARAMS is an alist with status and message fields.
+Optional SESSION is the resolved session; when nil, falls back to
+looking up session_id from PARAMS for backward compatibility."
+  (when-let* ((resolved-session
+               (or session
+                   (when-let ((session-id (alist-get 'session_id params)))
+                     (gethash session-id claude-code-ide--sessions)))))
+    (let ((status (intern (alist-get 'status params "active")))
+          (message (alist-get 'message params)))
+      (setf (claude-code-ide-session-status resolved-session) status)
+      (when message
+        (setf (claude-code-ide-session-last-message resolved-session) message))
+      (setf (claude-code-ide-session-status-updated-at resolved-session) (float-time))
+      ;; Refresh dashboard if visible
+      (when-let ((buf (get-buffer claude-code-ide-dashboard-buffer-name)))
+        (when (get-buffer-window buf t)
+          (with-current-buffer buf
+            (revert-buffer t t)))))))
+
 (defun claude-code-ide-mcp--handle-message (message &optional session)
   "Handle incoming JSON-RPC MESSAGE from SESSION."
   (when message
@@ -401,6 +446,10 @@ Optional SESSION contains the MCP session context."
              ((string= method "prompts/list")
               (claude-code-ide-debug "Handling prompts/list request")
               (claude-code-ide-mcp--handle-prompts-list id params))
+             ((string= method "session/statusChanged")
+              (claude-code-ide-debug "Handling session/statusChanged notification")
+              (claude-code-ide-mcp--handle-status-changed params)
+              nil)  ; notification, no response needed
              ;; Unknown method
              (id
               (claude-code-ide-debug "Unknown method: %s (sending error response)" method)
@@ -511,54 +560,43 @@ Optional SESSION contains the MCP session context."
   (claude-code-ide-debug "WebSocket state: %s" (websocket-ready-state ws))
   (claude-code-ide-debug "WebSocket URL: %s" (websocket-url ws))
 
-  ;; Find the session that owns this connection
-  ;; We need to extract the port from the websocket connection info
-  (let ((session nil)
-        (port nil))
-    ;; Try to extract port from the websocket string representation
-    ;; Format: "websocket server on port XXXXX <127.0.0.1:YYYYY>"
-    (let ((ws-string (format "%s" ws)))
-      (claude-code-ide-debug "WebSocket string representation: %s" ws-string)
-      (when (string-match "on port \\([0-9]+\\)" ws-string)
-        (setq port (string-to-number (match-string 1 ws-string)))
-        (claude-code-ide-debug "Extracted port: %d" port)))
-    ;; If we couldn't extract port from string, we'll have to search all sessions
-    ;; Find session by matching port
-    (when port
-      (maphash (lambda (_id s)
-                 (when (eq (claude-code-ide-session-port s) port)
-                   (setq session s)))
-               claude-code-ide--sessions))
+  ;; Find the session that owns this connection by extracting port from WS
+  (let ((session (claude-code-ide-mcp--find-session-by-ws-port ws)))
 
     (if session
-        (progn
-          ;; Update session with client
-          (setf (claude-code-ide-session-client session) ws)
-          (claude-code-ide-debug "Claude Code connected to MCP server for %s"
-                                 (file-name-nondirectory
-                                  (directory-file-name (claude-code-ide-session-directory session))))
+        (let ((existing-client (claude-code-ide-session-client session)))
+          (if existing-client
+              ;; Session already has a client (the real CLI connection).
+              ;; This is likely a transient connection (e.g. status-notify
+              ;; script).  Do NOT overwrite the real client.
+              (claude-code-ide-debug "Ignoring secondary WebSocket connection (session already has a client)")
+            ;; First client connection -- this is the real CLI
+            (setf (claude-code-ide-session-client session) ws)
+            (claude-code-ide-debug "Claude Code connected to MCP server for %s"
+                                   (file-name-nondirectory
+                                    (directory-file-name (claude-code-ide-session-directory session))))
 
-          ;; Send initial active editor notification if we have one in the project
-          (let ((file-path (buffer-file-name))
-                (project-dir (claude-code-ide-session-directory session)))
-            (when (and file-path
-                       project-dir
-                       (string-prefix-p (expand-file-name project-dir)
-                                        (expand-file-name file-path)))
-              (setf (claude-code-ide-session-last-buffer session) (current-buffer))
-              ;; Update MCP tools server's last active buffer
-              (claude-code-ide-mcp-server-update-last-active-buffer
-               (claude-code-ide-session-session-id session) (current-buffer))
-              (run-at-time claude-code-ide-mcp-initial-notification-delay nil
-                           (lambda ()
-                             (when-let ((s (claude-code-ide-mcp--get-session-for-project project-dir)))
-                               (let ((file-path (buffer-file-name)))
-                                 (claude-code-ide-mcp--send-notification
-                                  "workspace/didChangeActiveEditor"
-                                  `((uri . ,(concat "file://" file-path))
-                                    (path . ,file-path)
-                                    (name . ,(buffer-name))))))))))
-          (claude-code-ide-debug "Warning: Could not find session for WebSocket connection")))))
+            ;; Send initial active editor notification if we have one in the project
+            (let ((file-path (buffer-file-name))
+                  (project-dir (claude-code-ide-session-directory session)))
+              (when (and file-path
+                         project-dir
+                         (string-prefix-p (expand-file-name project-dir)
+                                          (expand-file-name file-path)))
+                (setf (claude-code-ide-session-last-buffer session) (current-buffer))
+                ;; Update MCP tools server's last active buffer
+                (claude-code-ide-mcp-server-update-last-active-buffer
+                 (claude-code-ide-session-session-id session) (current-buffer))
+                (run-at-time claude-code-ide-mcp-initial-notification-delay nil
+                             (lambda ()
+                               (when-let ((s (claude-code-ide-mcp--get-session-for-project project-dir)))
+                                 (let ((file-path (buffer-file-name)))
+                                   (claude-code-ide-mcp--send-notification
+                                    "workspace/didChangeActiveEditor"
+                                    `((uri . ,(concat "file://" file-path))
+                                      (path . ,file-path)
+                                      (name . ,(buffer-name))))))))))))
+      (claude-code-ide-debug "Warning: Could not find session for WebSocket connection"))))
 
 (defun claude-code-ide-mcp--on-message (ws frame)
   "Handle incoming WebSocket message from WS in FRAME."
@@ -573,21 +611,26 @@ Optional SESSION contains the MCP session context."
 
         ;; Find the session for this websocket
         (let ((session (claude-code-ide-mcp--find-session-by-websocket ws)))
-          (if session
-              (progn
-                (let* ((text (websocket-frame-text frame))
-                       (message (condition-case err
-                                    (json-read-from-string text)
-                                  (error
-                                   (claude-code-ide-debug "JSON parse error: %s" err)
-                                   (claude-code-ide-debug "Raw text: %s" text)
-                                   (claude-code-ide-debug "Failed to parse JSON: %s" err)
-                                   nil))))
-                  (claude-code-ide-debug "Received: %s" text)
-                  (claude-code-ide-debug "MCP received: %s" text)
-                  (when message
-                    (claude-code-ide-mcp--handle-message message session))))
-            (claude-code-ide-debug "Warning: Could not find session for WebSocket message"))))
+          (let* ((text (websocket-frame-text frame))
+                 (message (condition-case err
+                              (json-read-from-string text)
+                            (error
+                             (claude-code-ide-debug "JSON parse error: %s" err)
+                             (claude-code-ide-debug "Raw text: %s" text)
+                             (claude-code-ide-debug "Failed to parse JSON: %s" err)
+                             nil))))
+            (claude-code-ide-debug "Received: %s" text)
+            (claude-code-ide-debug "MCP received: %s" text)
+            (when message
+              (if session
+                  (claude-code-ide-mcp--handle-message message session)
+                ;; No session -- only allow statusChanged notifications
+                ;; Resolve session via WS port for anonymous connections
+                (if (equal (alist-get 'method message) "session/statusChanged")
+                    (let ((resolved (claude-code-ide-mcp--find-session-by-ws-port ws)))
+                      (claude-code-ide-mcp--handle-status-changed
+                       (alist-get 'params message) resolved))
+                  (claude-code-ide-debug "Warning: Could not find session for WebSocket message")))))))
     (error
      ;; If we get an error accessing frame properties, log it and continue
      (claude-code-ide-debug "Error processing WebSocket frame: %s" err)

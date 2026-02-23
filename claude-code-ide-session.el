@@ -33,6 +33,10 @@ and the directory-keyed process/session-id hash tables."
   last-buffer       ; last active buffer for change detection
   deferred          ; hash-table of deferred responses
   active-diffs      ; hash-table of active ediff sessions
+  ;; Status tracking
+  (status 'active)    ; symbol: active or idle
+  last-message        ; string: last assistant message or tool name
+  status-updated-at   ; float-time: timestamp of last status update
   original-tab)     ; tab-bar tab where session was started
 
 (defvar claude-code-ide--sessions (make-hash-table :test 'equal)

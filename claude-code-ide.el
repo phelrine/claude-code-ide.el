@@ -751,6 +751,77 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
                                    (file-name-nondirectory (directory-file-name dir)))))
       (setq claude-code-ide--cleanup-in-progress nil))))
 
+;;; Status Hook Management
+
+(defun claude-code-ide--package-scripts-dir ()
+  "Return the path to the scripts/ directory within this package."
+  (let ((pkg-dir (file-name-directory (or load-file-name
+                                          (locate-library "claude-code-ide")
+                                          (buffer-file-name)))))
+    (expand-file-name "scripts/" pkg-dir)))
+
+(defconst claude-code-ide--status-hook-command "python3 ~/.claude/hooks/status-notify.py"
+  "Hook command for status notifications.")
+
+(defconst claude-code-ide--status-hook-events '("Stop" "PreToolUse" "PostToolUse" "UserPromptSubmit")
+  "Hook events that trigger status notifications.")
+
+;;;###autoload
+(defun claude-code-ide-setup-status-hooks ()
+  "Set up static status notification hooks in user-level settings.
+Copies `status-notify.py' to `~/.claude/hooks/' and merges hook
+entries into `~/.claude/settings.json'.  Idempotent: safe to run
+multiple times."
+  (interactive)
+  (let* ((hooks-dir (expand-file-name "~/.claude/hooks/"))
+         (settings-file (expand-file-name "~/.claude/settings.json"))
+         (src-script (expand-file-name "status-notify.py"
+                                       (claude-code-ide--package-scripts-dir)))
+         (dst-script (expand-file-name "status-notify.py" hooks-dir)))
+    ;; Copy script
+    (make-directory hooks-dir t)
+    (copy-file src-script dst-script t)
+    ;; Read or create settings
+    (let* ((config (if (file-exists-p settings-file)
+                       (with-temp-buffer
+                         (insert-file-contents settings-file)
+                         (json-read))
+                     nil))
+           (existing-hooks (or (alist-get 'hooks config) nil))
+           (hook-entry `((hooks . ,(vector `((type . "command")
+                                             (command . ,claude-code-ide--status-hook-command))))))
+           (changed nil))
+      ;; For each event, ensure our hook-group is present
+      (dolist (event-name claude-code-ide--status-hook-events)
+        (let* ((event-sym (intern event-name))
+               (existing-groups (alist-get event-sym existing-hooks))
+               ;; Check if our hook is already present
+               (already-present
+                (and existing-groups
+                     (cl-some (lambda (group)
+                                (let ((hooks-vec (cdr (assoc 'hooks group))))
+                                  (and hooks-vec
+                                       (cl-some (lambda (h)
+                                                  (equal (cdr (assoc 'command h))
+                                                         claude-code-ide--status-hook-command))
+                                                (append hooks-vec nil)))))
+                              (append existing-groups nil)))))
+          (unless already-present
+            (setq changed t)
+            (if existing-groups
+                (setf (alist-get event-sym existing-hooks)
+                      (vconcat existing-groups (vector hook-entry)))
+              (push (cons event-sym (vector hook-entry)) existing-hooks)))))
+      ;; Write back if changed
+      (when changed
+        (if (assoc 'hooks config)
+            (setcdr (assoc 'hooks config) existing-hooks)
+          (push (cons 'hooks existing-hooks) config))
+        (with-temp-file settings-file
+          (let ((json-encoding-pretty-print t))
+            (insert (json-encode config))))))
+    (claude-code-ide-log "Status hooks configured in %s" settings-file)))
+
 ;;; CLI Detection
 
 (defun claude-code-ide--detect-cli ()

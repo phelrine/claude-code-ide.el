@@ -49,6 +49,8 @@
 (declare-function claude-code-ide-mcp--active-sessions "claude-code-ide-mcp" ())
 (declare-function claude-code-ide-mcp--get-current-session "claude-code-ide-mcp" ())
 (declare-function claude-code-ide--get-working-directory "claude-code-ide" ())
+(autoload 'claude-code-ide-dashboard "claude-code-ide-dashboard" "Open the session dashboard." t)
+(declare-function claude-code-ide-setup-status-hooks "claude-code-ide" ())
 
 ;; Declare variables
 (defvar claude-code-ide--sessions)
@@ -289,7 +291,9 @@ Otherwise, if multiple sessions exist, prompt for selection."
     ("r" claude-code-ide-resume :description claude-code-ide--resume-description)
     ("q" "Stop current session" claude-code-ide-stop)
     ("l" "List all sessions" claude-code-ide-list-sessions)
-    ("R" "Rename session" claude-code-ide-rename-session)]
+    ("R" "Rename session" claude-code-ide-rename-session)
+    ("d" "Session dashboard" claude-code-ide-dashboard)
+    ("H" "Setup status hooks" claude-code-ide-setup-status-hooks)]
    ["Navigation"
     ("b" "Switch to Claude buffer" claude-code-ide-switch-to-buffer)
     ("w" "Toggle window visibility" claude-code-ide-toggle-window)
@@ -301,7 +305,7 @@ Otherwise, if multiple sessions exist, prompt for selection."
     ("n" "Insert newline" claude-code-ide-insert-newline)]
    ["Submenus"
     ("C" "Configuration" claude-code-ide-config-menu)
-    ("d" "Debugging" claude-code-ide-debug-menu)]])
+    ("D" "Debugging" claude-code-ide-debug-menu)]])
 
 (transient-define-prefix claude-code-ide-config-menu ()
   "Claude Code configuration menu."
