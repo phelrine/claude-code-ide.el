@@ -236,6 +236,49 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (= 1 (hash-table-count claude-code-ide--sessions)))
     (should (claude-code-ide-session-p (gethash "session-1" claude-code-ide--sessions)))))
 
+;;; Tests for Session Lookup Helpers
+
+(ert-deftest claude-code-ide-test-sessions-for-directory ()
+  "Test looking up sessions by directory."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (puthash "s1" (make-claude-code-ide-session :session-id "s1" :directory "/tmp/proj/") claude-code-ide--sessions)
+    (puthash "s2" (make-claude-code-ide-session :session-id "s2" :directory "/tmp/proj/") claude-code-ide--sessions)
+    (puthash "s3" (make-claude-code-ide-session :session-id "s3" :directory "/tmp/other/") claude-code-ide--sessions)
+    (should (= 2 (length (claude-code-ide--sessions-for-directory "/tmp/proj/"))))
+    (should (= 1 (length (claude-code-ide--sessions-for-directory "/tmp/other/"))))
+    (should (= 0 (length (claude-code-ide--sessions-for-directory "/tmp/none/"))))))
+
+(ert-deftest claude-code-ide-test-session-for-buffer ()
+  "Test looking up session by buffer."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (buf (generate-new-buffer " *test-claude*")))
+    (unwind-protect
+        (progn
+          (puthash "s1" (make-claude-code-ide-session :session-id "s1" :buffer buf) claude-code-ide--sessions)
+          (should (equal "s1" (claude-code-ide-session-session-id
+                               (claude-code-ide--session-for-buffer buf))))
+          (should (null (claude-code-ide--session-for-buffer (generate-new-buffer " *other*")))))
+      (kill-buffer buf))))
+
+(ert-deftest claude-code-ide-test-session-count ()
+  "Test counting sessions for a directory."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (puthash "s1" (make-claude-code-ide-session :session-id "s1" :directory "/tmp/proj/") claude-code-ide--sessions)
+    (puthash "s2" (make-claude-code-ide-session :session-id "s2" :directory "/tmp/proj/") claude-code-ide--sessions)
+    (should (= 2 (claude-code-ide--session-count "/tmp/proj/")))
+    (should (= 0 (claude-code-ide--session-count "/tmp/other/")))))
+
+(ert-deftest claude-code-ide-test-buffer-name-for-session ()
+  "Test buffer name generation for sessions."
+  (let ((session-unnamed (make-claude-code-ide-session
+                          :session-id "s1" :name nil :directory "/tmp/my-project/")))
+    (should (equal "*claude-code[my-project]*"
+                   (claude-code-ide--buffer-name-for-session session-unnamed))))
+  (let ((session-named (make-claude-code-ide-session
+                        :session-id "s2" :name "design" :directory "/tmp/my-project/")))
+    (should (equal "*claude-code[my-project:design]*"
+                   (claude-code-ide--buffer-name-for-session session-named)))))
+
 ;;; Tests for Helper Functions
 
 (ert-deftest claude-code-ide-test-default-buffer-name ()

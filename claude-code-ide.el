@@ -123,6 +123,39 @@ and the directory-keyed process/session-id hash tables."
   "Hash table mapping session-id to `claude-code-ide-session' structs.
 This is the single source of truth for all active sessions.")
 
+;;; Session Lookup Helpers
+
+(defun claude-code-ide--sessions-for-directory (dir)
+  "Return list of sessions for DIR."
+  (let ((sessions '()))
+    (maphash (lambda (_id session)
+               (when (equal (claude-code-ide-session-directory session) dir)
+                 (push session sessions)))
+             claude-code-ide--sessions)
+    sessions))
+
+(defun claude-code-ide--session-for-buffer (buffer)
+  "Return the session that owns BUFFER, or nil."
+  (let ((found nil))
+    (maphash (lambda (_id session)
+               (when (eq (claude-code-ide-session-buffer session) buffer)
+                 (setq found session)))
+             claude-code-ide--sessions)
+    found))
+
+(defun claude-code-ide--session-count (dir)
+  "Return the number of active sessions for DIR."
+  (length (claude-code-ide--sessions-for-directory dir)))
+
+(defun claude-code-ide--buffer-name-for-session (session)
+  "Generate buffer name for SESSION."
+  (let* ((dir (claude-code-ide-session-directory session))
+         (project-name (file-name-nondirectory (directory-file-name dir)))
+         (name (claude-code-ide-session-name session)))
+    (if name
+        (format "*claude-code[%s:%s]*" project-name name)
+      (format "*claude-code[%s]*" project-name))))
+
 (defcustom claude-code-ide-cli-path "claude"
   "Path to the Claude Code CLI executable."
   :type 'string
