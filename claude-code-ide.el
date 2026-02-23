@@ -61,6 +61,38 @@
 (require 'cl-lib)
 (require 'project)
 (require 'claude-code-ide-debug)
+
+;;; Session Structure
+;;
+;; Defined early so that `claude-code-ide-mcp' (required below) can
+;; use the struct accessors and `setf' forms at load time.
+
+(cl-defstruct claude-code-ide-session
+  "Unified structure holding all state for a single Claude Code session.
+Replaces the former separate `claude-code-ide-mcp-session' struct
+and the directory-keyed process/session-id hash tables."
+  session-id        ; unique identifier, e.g. "claude-project-20260223-143000"
+  name              ; user-facing display name (e.g. "design"), nil for default
+  directory         ; expanded project root path
+  ;; Process & buffer
+  process           ; terminal process
+  buffer            ; terminal buffer
+  ;; MCP state
+  port              ; WebSocket server port
+  server            ; WebSocket server object
+  client            ; connected WebSocket client
+  ping-timer        ; keepalive timer
+  selection-timer   ; selection change debounce timer
+  last-selection    ; last selection state for change detection
+  last-buffer       ; last active buffer for change detection
+  deferred          ; hash-table of deferred responses
+  active-diffs      ; hash-table of active ediff sessions
+  original-tab)     ; tab-bar tab where session was started
+
+(defvar claude-code-ide--sessions (make-hash-table :test 'equal)
+  "Hash table mapping session-id to `claude-code-ide-session' structs.
+This is the single source of truth for all active sessions.")
+
 (require 'claude-code-ide-mcp)
 (require 'claude-code-ide-transient)
 (require 'claude-code-ide-mcp-server)
@@ -94,34 +126,6 @@
   "Claude Code integration for Emacs."
   :group 'tools
   :prefix "claude-code-ide-")
-
-;;; Session Structure
-
-(cl-defstruct claude-code-ide-session
-  "Unified structure holding all state for a single Claude Code session.
-Replaces the former separate `claude-code-ide-mcp-session' struct
-and the directory-keyed process/session-id hash tables."
-  session-id        ; unique identifier, e.g. "claude-project-20260223-143000"
-  name              ; user-facing display name (e.g. "design"), nil for default
-  directory         ; expanded project root path
-  ;; Process & buffer
-  process           ; terminal process
-  buffer            ; terminal buffer
-  ;; MCP state
-  port              ; WebSocket server port
-  server            ; WebSocket server object
-  client            ; connected WebSocket client
-  ping-timer        ; keepalive timer
-  selection-timer   ; selection change debounce timer
-  last-selection    ; last selection state for change detection
-  last-buffer       ; last active buffer for change detection
-  deferred          ; hash-table of deferred responses
-  active-diffs      ; hash-table of active ediff sessions
-  original-tab)     ; tab-bar tab where session was started
-
-(defvar claude-code-ide--sessions (make-hash-table :test 'equal)
-  "Hash table mapping session-id to `claude-code-ide-session' structs.
-This is the single source of truth for all active sessions.")
 
 ;;; Session Lookup Helpers
 
@@ -750,12 +754,14 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
                      (= (hash-table-count claude-code-ide--processes) 0))
             (advice-remove 'vterm--filter #'claude-code-ide--vterm-smart-renderer))
           ;; Stop MCP server for this project directory
-          (claude-code-ide-mcp-stop-session directory)
-          ;; Notify MCP tools server about session end with session ID
           (let ((session-id (gethash directory claude-code-ide--session-ids)))
-            (claude-code-ide-mcp-server-session-ended session-id)
-            ;; Clean up session ID mapping
             (when session-id
+              (claude-code-ide-mcp-stop-session session-id))
+            ;; Notify MCP tools server about session end with session ID
+            (claude-code-ide-mcp-server-session-ended session-id)
+            ;; Clean up session ID mapping and unified sessions table
+            (when session-id
+              (remhash session-id claude-code-ide--sessions)
               (remhash directory claude-code-ide--session-ids)))
           ;; Kill the vterm buffer if it exists
           (let ((buffer-name (claude-code-ide--get-buffer-name directory)))
@@ -803,7 +809,7 @@ If the window is not visible, it will be shown in a side window."
         ;; Update the original tab when showing the window
         (when-let ((session (claude-code-ide-mcp--get-session-for-project working-dir)))
           (when (fboundp 'tab-bar--current-tab)
-            (setf (claude-code-ide-mcp-session-original-tab session) (tab-bar--current-tab))))
+            (setf (claude-code-ide-session-original-tab session) (tab-bar--current-tab))))
         (claude-code-ide-debug "Claude Code window shown")))))
 
 (defun claude-code-ide--build-claude-command (&optional continue resume session-id)
@@ -1016,9 +1022,13 @@ This function handles:
                                 (file-name-nondirectory (directory-file-name working-dir))
                                 (format-time-string "%Y%m%d-%H%M%S"))))
         (condition-case err
-            (progn
+            (let ((session (make-claude-code-ide-session
+                            :session-id session-id
+                            :directory working-dir)))
+              ;; Register session in global table before starting MCP
+              (puthash session-id session claude-code-ide--sessions)
               ;; Start MCP server
-              (setq port (claude-code-ide-mcp-start working-dir))
+              (setq port (claude-code-ide-mcp-start session))
               ;; Create new terminal session
               (let* ((buffer-and-process (claude-code-ide--create-terminal-session
                                           buffer-name working-dir port continue resume session-id))
@@ -1078,7 +1088,7 @@ This function handles:
           (error
            ;; Terminal session creation failed - clean up MCP server
            (when port
-             (claude-code-ide-mcp-stop-session working-dir))
+             (claude-code-ide-mcp-stop-session session-id))
            ;; Re-signal the error with improved message
            (signal (car err) (cdr err))))))))
 
@@ -1176,7 +1186,7 @@ If the buffer is already visible, switch focus to it."
   (interactive)
   (if-let* ((project-dir (claude-code-ide-mcp--get-buffer-project))
             (session (claude-code-ide-mcp--get-session-for-project project-dir))
-            (client (claude-code-ide-mcp-session-client session)))
+            (client (claude-code-ide-session-client session)))
       (progn
         (claude-code-ide-mcp-send-at-mentioned)
         (claude-code-ide-debug "Sent selection to Claude Code"))

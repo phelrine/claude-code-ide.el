@@ -55,7 +55,20 @@
 (require 'claude-code-ide-mcp-server)
 
 ;; External declarations
-(defvar claude-code-ide--session-ids)
+(defvar claude-code-ide--sessions)
+(declare-function claude-code-ide-session-session-id "claude-code-ide" (session))
+(declare-function claude-code-ide-session-directory "claude-code-ide" (session))
+(declare-function claude-code-ide-session-port "claude-code-ide" (session))
+(declare-function claude-code-ide-session-server "claude-code-ide" (session))
+(declare-function claude-code-ide-session-client "claude-code-ide" (session))
+(declare-function claude-code-ide-session-ping-timer "claude-code-ide" (session))
+(declare-function claude-code-ide-session-selection-timer "claude-code-ide" (session))
+(declare-function claude-code-ide-session-last-selection "claude-code-ide" (session))
+(declare-function claude-code-ide-session-last-buffer "claude-code-ide" (session))
+(declare-function claude-code-ide-session-deferred "claude-code-ide" (session))
+(declare-function claude-code-ide-session-active-diffs "claude-code-ide" (session))
+(declare-function claude-code-ide-session-original-tab "claude-code-ide" (session))
+(declare-function make-claude-code-ide-session "claude-code-ide" (&rest args))
 (declare-function claude-code-ide-mcp--build-tool-list "claude-code-ide-mcp-handlers" ())
 (declare-function claude-code-ide-mcp--build-tool-schemas "claude-code-ide-mcp-handlers" ())
 (declare-function claude-code-ide-mcp--build-tool-descriptions "claude-code-ide-mcp-handlers" ())
@@ -82,10 +95,6 @@
 
 ;;; Variables
 
-;; Only keep the global sessions table
-(defvar claude-code-ide-mcp--sessions (make-hash-table :test 'equal)
-  "Hash table mapping project directories to MCP sessions.")
-
 ;; Buffer-local cache variables for performance optimization
 (defvar-local claude-code-ide-mcp--buffer-project-cache nil
   "Cached project directory for the current buffer.
@@ -105,20 +114,6 @@ Set to nil when cache needs to be invalidated.")
 
 ;;; Session Management
 
-(cl-defstruct claude-code-ide-mcp-session
-  "Structure to hold all state for a single MCP session."
-  server           ; WebSocket server instance
-  client           ; Connected WebSocket client
-  port             ; Server port
-  project-dir      ; Project directory
-  deferred         ; Hash table of deferred responses
-  ping-timer       ; Ping timer
-  selection-timer  ; Selection tracking timer
-  last-selection   ; Last selection state
-  last-buffer      ; Last active buffer
-  active-diffs     ; Hash table of active diffs
-  original-tab)    ; Original tab-bar tab where Claude was opened
-
 (defun claude-code-ide-mcp--get-buffer-project ()
   "Get the project directory for the current buffer.
 Returns the expanded project root path if a project is found,
@@ -137,10 +132,15 @@ Uses buffer-local cache to avoid repeated project lookups."
       project-dir)))
 
 (defun claude-code-ide-mcp--get-session-for-project (project-dir)
-  "Get the MCP session for PROJECT-DIR.
-Returns the session structure if found, nil otherwise."
+  "Get an MCP session for PROJECT-DIR.  Returns the first matching session."
   (when project-dir
-    (gethash project-dir claude-code-ide-mcp--sessions)))
+    (let ((found nil))
+      (maphash (lambda (_id session)
+                 (when (and (not found)
+                            (equal (claude-code-ide-session-directory session) project-dir))
+                   (setq found session)))
+               claude-code-ide--sessions)
+      found)))
 
 (defun claude-code-ide-mcp--get-current-session ()
   "Get the MCP session for the current buffer's project.
@@ -151,22 +151,20 @@ This is a convenience function that combines
     (claude-code-ide-mcp--get-session-for-project project-dir)))
 
 (defun claude-code-ide-mcp--find-session-by-websocket (ws)
-  "Find the MCP session that owns the WebSocket WS.
-Searches through all active sessions to find the one with matching client.
-Returns the session if found, nil otherwise."
-  (let ((found-session nil))
-    (maphash (lambda (_project-dir session)
-               (when (eq (claude-code-ide-mcp-session-client session) ws)
-                 (setq found-session session)))
-             claude-code-ide-mcp--sessions)
-    found-session))
+  "Find the session that owns WebSocket WS."
+  (let ((found nil))
+    (maphash (lambda (_id session)
+               (when (eq (claude-code-ide-session-client session) ws)
+                 (setq found session)))
+             claude-code-ide--sessions)
+    found))
 
 (defun claude-code-ide-mcp--active-sessions ()
   "Return a list of all active MCP sessions."
   (let ((sessions '()))
-    (maphash (lambda (_project-dir session)
+    (maphash (lambda (_id session)
                (push session sessions))
-             claude-code-ide-mcp--sessions)
+             claude-code-ide--sessions)
     sessions))
 
 ;;; Backward Compatibility Layer
@@ -241,7 +239,7 @@ Returns the session if found, nil otherwise."
                                (setq claude-code-ide-mcp--buffer-session-cache found-session
                                      claude-code-ide-mcp--buffer-cache-valid t))
                              found-session)))
-              (client (claude-code-ide-mcp-session-client session)))
+              (client (claude-code-ide-session-client session)))
     (let ((message `((jsonrpc . "2.0")
                      (method . ,method)
                      (params . ,params))))
@@ -364,10 +362,10 @@ Optional SESSION contains the MCP session context."
                              (session (or result-session
                                           (claude-code-ide-mcp--get-current-session))))
                         (if session
-                            (let ((session-deferred (claude-code-ide-mcp-session-deferred session)))
+                            (let ((session-deferred (claude-code-ide-session-deferred session)))
                               (puthash storage-key id session-deferred)
                               (claude-code-ide-debug "Stored deferred response in session for %s"
-                                                     (claude-code-ide-mcp-session-project-dir session)))
+                                                     (claude-code-ide-session-directory session)))
                           (claude-code-ide-debug "Warning: No session found, cannot store deferred response")))
                       ;; Don't send a response yet
                       nil)
@@ -427,7 +425,7 @@ Optional SESSION contains the MCP session context."
        ;; We have a response to send
        (response
         (let ((client (if session
-                          (claude-code-ide-mcp-session-client session)
+                          (claude-code-ide-session-client session)
                         ;; Fallback: try to find session from current buffer using cache
                         (when-let ((s (or (when (and claude-code-ide-mcp--buffer-cache-valid
                                                      claude-code-ide-mcp--buffer-session-cache)
@@ -439,7 +437,7 @@ Optional SESSION contains the MCP session context."
                                               (setq claude-code-ide-mcp--buffer-session-cache found-session
                                                     claude-code-ide-mcp--buffer-cache-valid t))
                                             found-session))))
-                          (claude-code-ide-mcp-session-client s)))))
+                          (claude-code-ide-session-client s)))))
           (if client
               (let ((response-text (json-encode response)))
                 (claude-code-ide-debug "Sending response for method %s (id %s): %s" method id response-text)
@@ -457,10 +455,10 @@ Optional SESSION contains the MCP session context."
         (let ((tool-name (alist-get 'name params))
               (found nil))
           (when tool-name
-            (maphash (lambda (_proj-dir s)
-                       (when (gethash tool-name (claude-code-ide-mcp-session-deferred s))
+            (maphash (lambda (_id s)
+                       (when (gethash tool-name (claude-code-ide-session-deferred s))
                          (setq found t)))
-                     claude-code-ide-mcp--sessions)
+                     claude-code-ide--sessions)
             (when found
               (claude-code-ide-debug "Confirmed: %s is waiting for deferred response" tool-name)))))
        ;; No response and no ID (notification)
@@ -537,33 +535,33 @@ Optional SESSION contains the MCP session context."
     ;; If we couldn't extract port from string, we'll have to search all sessions
     ;; Find session by matching port
     (when port
-      (maphash (lambda (_project-dir s)
-                 (when (eq (claude-code-ide-mcp-session-port s) port)
+      (maphash (lambda (_id s)
+                 (when (eq (claude-code-ide-session-port s) port)
                    (setq session s)))
-               claude-code-ide-mcp--sessions))
+               claude-code-ide--sessions))
 
     (if session
         (progn
           ;; Update session with client
-          (setf (claude-code-ide-mcp-session-client session) ws)
+          (setf (claude-code-ide-session-client session) ws)
           (claude-code-ide-debug "Claude Code connected to MCP server for %s"
                                  (file-name-nondirectory
-                                  (directory-file-name (claude-code-ide-mcp-session-project-dir session))))
+                                  (directory-file-name (claude-code-ide-session-directory session))))
 
           ;; Send initial active editor notification if we have one in the project
           (let ((file-path (buffer-file-name))
-                (project-dir (claude-code-ide-mcp-session-project-dir session)))
+                (project-dir (claude-code-ide-session-directory session)))
             (when (and file-path
                        project-dir
                        (string-prefix-p (expand-file-name project-dir)
                                         (expand-file-name file-path)))
-              (setf (claude-code-ide-mcp-session-last-buffer session) (current-buffer))
+              (setf (claude-code-ide-session-last-buffer session) (current-buffer))
               ;; Update MCP tools server's last active buffer
-              (when-let ((session-id (gethash project-dir claude-code-ide--session-ids)))
-                (claude-code-ide-mcp-server-update-last-active-buffer session-id (current-buffer)))
+              (claude-code-ide-mcp-server-update-last-active-buffer
+               (claude-code-ide-session-session-id session) (current-buffer))
               (run-at-time claude-code-ide-mcp-initial-notification-delay nil
                            (lambda ()
-                             (when-let ((s (gethash project-dir claude-code-ide-mcp--sessions)))
+                             (when-let ((s (claude-code-ide-mcp--get-session-for-project project-dir)))
                                (let ((file-path (buffer-file-name)))
                                  (claude-code-ide-mcp--send-notification
                                   "workspace/didChangeActiveEditor"
@@ -626,13 +624,13 @@ Optional SESSION contains the MCP session context."
   (let ((session (claude-code-ide-mcp--find-session-by-websocket ws)))
     (when session
       ;; Clear the client in the session
-      (setf (claude-code-ide-mcp-session-client session) nil)
+      (setf (claude-code-ide-session-client session) nil)
       ;; Stop the ping timer for this session
       (claude-code-ide-mcp--stop-ping-timer session)
       (claude-code-ide-debug "Final WebSocket state: %s" (websocket-ready-state ws))
       (claude-code-ide-debug "Claude Code disconnected from MCP server for %s"
                              (file-name-nondirectory
-                              (directory-file-name (claude-code-ide-mcp-session-project-dir session)))))))
+                              (directory-file-name (claude-code-ide-session-directory session)))))))
 
 (defun claude-code-ide-mcp--on-ping (_ws _frame)
   "Handle WebSocket ping from WS in FRAME."
@@ -648,17 +646,17 @@ Optional SESSION contains the MCP session context."
   (let ((timer (run-with-timer claude-code-ide-mcp-ping-interval claude-code-ide-mcp-ping-interval
                                (lambda ()
                                  (claude-code-ide-mcp--send-ping session)))))
-    (setf (claude-code-ide-mcp-session-ping-timer session) timer)))
+    (setf (claude-code-ide-session-ping-timer session) timer)))
 
 (defun claude-code-ide-mcp--stop-ping-timer (session)
   "Stop the ping timer for SESSION."
-  (when-let ((timer (claude-code-ide-mcp-session-ping-timer session)))
+  (when-let ((timer (claude-code-ide-session-ping-timer session)))
     (cancel-timer timer)
-    (setf (claude-code-ide-mcp-session-ping-timer session) nil)))
+    (setf (claude-code-ide-session-ping-timer session) nil)))
 
 (defun claude-code-ide-mcp--send-ping (session)
   "Send a ping frame to keep connection alive for SESSION."
-  (when-let ((client (claude-code-ide-mcp-session-client session)))
+  (when-let ((client (claude-code-ide-session-client session)))
     (condition-case err
         (websocket-send client
                         (make-websocket-frame :opcode 'ping
@@ -703,12 +701,12 @@ This should be called when the buffer's context might have changed."
       ;; Only proceed if we have a session
       (when session
         ;; Cancel any existing timer for this session
-        (when-let ((timer (claude-code-ide-mcp-session-selection-timer session)))
+        (when-let ((timer (claude-code-ide-session-selection-timer session)))
           (cancel-timer timer))
         ;; Set new timer for this session
-        (let ((project-dir (claude-code-ide-mcp-session-project-dir session))
+        (let ((project-dir (claude-code-ide-session-directory session))
               (current-buffer (current-buffer)))
-          (setf (claude-code-ide-mcp-session-selection-timer session)
+          (setf (claude-code-ide-session-selection-timer session)
                 (run-with-timer claude-code-ide-mcp-selection-delay nil
                                 (lambda ()
                                   ;; Make sure we're in the right buffer context when timer fires
@@ -720,11 +718,11 @@ This should be called when the buffer's context might have changed."
   "Send current selection to Claude for PROJECT-DIR."
   (when-let ((session (claude-code-ide-mcp--get-session-for-project project-dir)))
     ;; Clear the timer in the session
-    (setf (claude-code-ide-mcp-session-selection-timer session) nil)
+    (setf (claude-code-ide-session-selection-timer session) nil)
 
     (let ((file-path (buffer-file-name)))
       ;; Only process if we have a client and a file-backed buffer
-      (when (and (claude-code-ide-mcp-session-client session)
+      (when (and (claude-code-ide-session-client session)
                  file-path)
         ;; Check if file is within project
         (let ((file-in-project (string-prefix-p (expand-file-name project-dir)
@@ -735,18 +733,18 @@ This should be called when the buffer's context might have changed."
                      (current-state (if (use-region-p)
                                         (list cursor-pos (region-beginning) (region-end))
                                       (list cursor-pos cursor-pos cursor-pos)))
-                     (last-state (claude-code-ide-mcp-session-last-selection session))
+                     (last-state (claude-code-ide-session-last-selection session))
                      (state-changed (not (equal current-state last-state))))
                 ;; Send notification if cursor or selection changed
                 (when state-changed
-                  (setf (claude-code-ide-mcp-session-last-selection session) current-state)
+                  (setf (claude-code-ide-session-last-selection session) current-state)
                   (let ((selection (claude-code-ide-mcp-handle-get-current-selection nil)))
                     (claude-code-ide-mcp--send-notification "selection_changed" selection))))
             ;; File outside project - reset selection state
-            (setf (claude-code-ide-mcp-session-last-selection session) nil))))
+            (setf (claude-code-ide-session-last-selection session) nil))))
       ;; Reset selection state for non-file buffers
       (unless file-path
-        (setf (claude-code-ide-mcp-session-last-selection session) nil)))))
+        (setf (claude-code-ide-session-last-selection session) nil)))))
 
 (defun claude-code-ide-mcp--send-selection ()
   "Send current selection to Claude."
@@ -763,7 +761,7 @@ This should be called when the buffer's context might have changed."
                            claude-code-ide-mcp--buffer-cache-valid t)
                      found-session))))
     (when session
-      (let ((project-dir (claude-code-ide-mcp-session-project-dir session)))
+      (let ((project-dir (claude-code-ide-session-directory session)))
         (claude-code-ide-mcp--send-selection-for-project project-dir)))))
 
 (defun claude-code-ide-mcp--track-active-buffer ()
@@ -785,17 +783,17 @@ This should be called when the buffer's context might have changed."
                                claude-code-ide-mcp--buffer-cache-valid t)
                          found-session))))
         ;; Only proceed if we have a session with a client
-        (when (and session (claude-code-ide-mcp-session-client session))
-          (let ((project-dir (claude-code-ide-mcp-session-project-dir session)))
+        (when (and session (claude-code-ide-session-client session))
+          (let ((project-dir (claude-code-ide-session-directory session)))
             ;; Check if this is a different buffer than last tracked in the session
             ;; and that the file is within the project directory
-            (when (and (not (eq current-buffer (claude-code-ide-mcp-session-last-buffer session)))
+            (when (and (not (eq current-buffer (claude-code-ide-session-last-buffer session)))
                        (string-prefix-p (expand-file-name project-dir)
                                         (expand-file-name file-path)))
-              (setf (claude-code-ide-mcp-session-last-buffer session) current-buffer)
+              (setf (claude-code-ide-session-last-buffer session) current-buffer)
               ;; Update MCP tools server's last active buffer
-              (when-let ((session-id (gethash project-dir claude-code-ide--session-ids)))
-                (claude-code-ide-mcp-server-update-last-active-buffer session-id current-buffer))
+              (claude-code-ide-mcp-server-update-last-active-buffer
+               (claude-code-ide-session-session-id session) current-buffer)
               ;; Send notification
               (claude-code-ide-mcp--send-notification
                "workspace/didChangeActiveEditor"
@@ -805,103 +803,79 @@ This should be called when the buffer's context might have changed."
 
 ;;; Public API
 
-(defun claude-code-ide-mcp-start (&optional project-directory)
-  "Start the MCP server for PROJECT-DIRECTORY."
+(defun claude-code-ide-mcp-start (session)
+  "Start the MCP WebSocket server for SESSION.
+Sets the port and server fields on the session struct.  Returns the port."
   (claude-code-ide-debug "=== Starting MCP server ===")
+  (let* ((project-dir (claude-code-ide-session-directory session))
+         (server-and-port (claude-code-ide-mcp--find-free-port))
+         (server (car server-and-port))
+         (port (cdr server-and-port)))
+    ;; Set port and server in session
+    (setf (claude-code-ide-session-port session) port
+          (claude-code-ide-session-server session) server)
+    ;; Initialize deferred and active-diffs if not already set
+    (unless (claude-code-ide-session-deferred session)
+      (setf (claude-code-ide-session-deferred session) (make-hash-table :test 'equal)))
+    (unless (claude-code-ide-session-active-diffs session)
+      (setf (claude-code-ide-session-active-diffs session) (make-hash-table :test 'equal)))
+    ;; Store original tab
+    (unless (claude-code-ide-session-original-tab session)
+      (setf (claude-code-ide-session-original-tab session)
+            (when (fboundp 'tab-bar--current-tab) (tab-bar--current-tab))))
+    (claude-code-ide-debug "Project directory: %s" project-dir)
+    (claude-code-ide-debug "Creating lockfile for port %d" port)
+    (claude-code-ide-mcp--create-lockfile port project-dir)
+    ;; Set up hooks for selection and buffer tracking
+    (add-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
+    (add-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer)
+    (claude-code-ide-debug "MCP server ready on port %d" port)
+    port))
 
-  (let* ((project-dir (expand-file-name (or project-directory default-directory)))
-         (existing-session (gethash project-dir claude-code-ide-mcp--sessions)))
-
-    ;; If there's an existing session for this project, return its port
-    (if existing-session
-        (progn
-          (claude-code-ide-debug "Reusing existing session for %s" project-dir)
-          (claude-code-ide-mcp-session-port existing-session))
-
-      ;; Create new session
-      (let* ((session (make-claude-code-ide-mcp-session
-                       :project-dir project-dir
-                       :deferred (make-hash-table :test 'equal)
-                       :active-diffs (make-hash-table :test 'equal)
-                       :original-tab (when (fboundp 'tab-bar--current-tab)
-                                       (tab-bar--current-tab))))
-             (server-and-port (claude-code-ide-mcp--find-free-port))
-             (server (car server-and-port))
-             (port (cdr server-and-port)))
-
-        ;; Set port and server in session
-        (setf (claude-code-ide-mcp-session-port session) port
-              (claude-code-ide-mcp-session-server session) server)
-
-        ;; Store session
-        (puthash project-dir session claude-code-ide-mcp--sessions)
-
-        (claude-code-ide-debug "Project directory: %s" project-dir)
-        (claude-code-ide-debug "Creating lockfile for port %d" port)
-        (claude-code-ide-mcp--create-lockfile port project-dir)
-
-        ;; Set up hooks for selection and buffer tracking
-        (add-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
-        (add-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer)
-
-        (claude-code-ide-debug "MCP server ready on port %d" port)
-        (claude-code-ide-debug "MCP server started on port %d for %s" port
-                               (file-name-nondirectory (directory-file-name project-dir)))
-        port))))
-
-(defun claude-code-ide-mcp-stop-session (project-dir)
-  "Stop the MCP session for PROJECT-DIR."
-  (when-let ((session (gethash project-dir claude-code-ide-mcp--sessions)))
-    (claude-code-ide-debug "Stopping MCP session for %s" project-dir)
-
-    ;; Close server and client
-    (when-let ((server (claude-code-ide-mcp-session-server session)))
-      (websocket-server-close server))
-
-    ;; Stop timers
-    (when-let ((ping-timer (claude-code-ide-mcp-session-ping-timer session)))
-      (cancel-timer ping-timer))
-    (when-let ((sel-timer (claude-code-ide-mcp-session-selection-timer session)))
-      (cancel-timer sel-timer))
-
-    ;; Remove lockfile
-    (when-let ((port (claude-code-ide-mcp-session-port session)))
-      (claude-code-ide-debug "Removing lockfile for port %d" port)
-      (claude-code-ide-mcp--remove-lockfile port))
-
-    ;; Remove session from registry
-    (remhash project-dir claude-code-ide-mcp--sessions)
-
-    ;; Invalidate cache in all buffers that belong to this project
-    (dolist (buffer (buffer-list))
-      (with-current-buffer buffer
-        (when (and claude-code-ide-mcp--buffer-project-cache
-                   (string= claude-code-ide-mcp--buffer-project-cache project-dir))
-          (claude-code-ide-mcp--invalidate-buffer-cache))))
-
-    ;; Remove hooks if no more sessions
-    (when (= 0 (hash-table-count claude-code-ide-mcp--sessions))
-      (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
-      (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer))
-
-    (claude-code-ide-debug "MCP server stopped for %s"
-                           (file-name-nondirectory (directory-file-name project-dir)))))
+(defun claude-code-ide-mcp-stop-session (session-id)
+  "Stop the MCP session identified by SESSION-ID."
+  (when-let ((session (gethash session-id claude-code-ide--sessions)))
+    (let ((project-dir (claude-code-ide-session-directory session)))
+      (claude-code-ide-debug "Stopping MCP session for %s" project-dir)
+      ;; Close server
+      (when-let ((server (claude-code-ide-session-server session)))
+        (websocket-server-close server))
+      ;; Stop timers
+      (when-let ((ping-timer (claude-code-ide-session-ping-timer session)))
+        (cancel-timer ping-timer))
+      (when-let ((sel-timer (claude-code-ide-session-selection-timer session)))
+        (cancel-timer sel-timer))
+      ;; Remove lockfile
+      (when-let ((port (claude-code-ide-session-port session)))
+        (claude-code-ide-debug "Removing lockfile for port %d" port)
+        (claude-code-ide-mcp--remove-lockfile port))
+      ;; Do NOT remove from hash table -- caller does that
+      ;; Invalidate cache in all buffers that belong to this project
+      (dolist (buffer (buffer-list))
+        (with-current-buffer buffer
+          (when (and claude-code-ide-mcp--buffer-project-cache
+                     (string= claude-code-ide-mcp--buffer-project-cache project-dir))
+            (claude-code-ide-mcp--invalidate-buffer-cache))))
+      ;; Remove hooks if no more sessions
+      (when (= 0 (hash-table-count claude-code-ide--sessions))
+        (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
+        (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer))
+      (claude-code-ide-debug "MCP server stopped for %s"
+                             (file-name-nondirectory (directory-file-name project-dir))))))
 
 (defun claude-code-ide-mcp-stop ()
   "Stop the MCP server for the current project or directory."
   (claude-code-ide-debug "Stopping MCP server...")
-
-  ;; Try to determine which session to stop
   (let ((project-dir (claude-code-ide-mcp--get-buffer-project)))
-
     (if project-dir
-        (claude-code-ide-mcp-stop-session project-dir)
-      ;; No specific project - stop all sessions (backward compatibility)
-      (let ((sessions (hash-table-keys claude-code-ide-mcp--sessions)))
-        (if sessions
-            (dolist (dir sessions)
-              (claude-code-ide-mcp-stop-session dir))
-          (claude-code-ide-debug "No MCP servers running"))))))
+        (when-let ((session (claude-code-ide-mcp--get-session-for-project project-dir)))
+          (claude-code-ide-mcp-stop-session (claude-code-ide-session-session-id session)))
+      ;; Stop all sessions
+      (let ((session-ids '()))
+        (maphash (lambda (id _session) (push id session-ids))
+                 claude-code-ide--sessions)
+        (dolist (id session-ids)
+          (claude-code-ide-mcp-stop-session id))))))
 
 (defun claude-code-ide-mcp-send-at-mentioned ()
   "Send at-mentioned notification.
@@ -932,12 +906,12 @@ responses."
     (if (not session)
         (claude-code-ide-debug "No session provided for completing deferred response %s" lookup-key)
       ;; Use the provided session directly
-      (let* ((session-deferred (claude-code-ide-mcp-session-deferred session))
+      (let* ((session-deferred (claude-code-ide-session-deferred session))
              (id (gethash lookup-key session-deferred)))
         (if id
-            (let ((client (claude-code-ide-mcp-session-client session)))
+            (let ((client (claude-code-ide-session-client session)))
               (claude-code-ide-debug "Found deferred response id %s in session for %s"
-                                     id (claude-code-ide-mcp-session-project-dir session))
+                                     id (claude-code-ide-session-directory session))
               (remhash lookup-key session-deferred)
               (if client
                   (let* ((response (claude-code-ide-mcp--make-response id `((content . ,result))))
@@ -953,9 +927,11 @@ responses."
 (defun claude-code-ide-mcp--cleanup ()
   "Cleanup all MCP sessions on Emacs exit."
   ;; Stop all sessions
-  (maphash (lambda (project-dir _session)
-             (claude-code-ide-mcp-stop-session project-dir))
-           claude-code-ide-mcp--sessions))
+  (let ((session-ids '()))
+    (maphash (lambda (id _session) (push id session-ids))
+             claude-code-ide--sessions)
+    (dolist (id session-ids)
+      (claude-code-ide-mcp-stop-session id))))
 
 (add-hook 'kill-emacs-hook #'claude-code-ide-mcp--cleanup)
 
