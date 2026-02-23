@@ -191,13 +191,10 @@ executes TEST-BODY, and ensures cleanup even if TEST-BODY fails."
           (funcall test-body))
       (delete-directory temp-dir t))))
 
-(defun claude-code-ide-tests--clear-processes ()
-  "Clear the process hash table for testing.
-Ensures a clean state before each test that involves process management."
-  (clrhash claude-code-ide--processes)
-  ;; Also clear unified sessions table
-  (when (boundp 'claude-code-ide--sessions)
-    (clrhash claude-code-ide--sessions)))
+(defun claude-code-ide-tests--clear-sessions ()
+  "Clear the sessions hash table for testing.
+Ensures a clean state before each test that involves session management."
+  (clrhash claude-code-ide--sessions))
 
 (defun claude-code-ide-tests--wait-for-process (buffer)
   "Wait for the process in BUFFER to finish.
@@ -325,51 +322,67 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (equal (funcall claude-code-ide-buffer-name-function nil)
                    "*custom[none]*"))))
 
-(ert-deftest claude-code-ide-test-process-management ()
-  "Test process storage and retrieval."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (claude-code-ide-tests--with-temp-directory
-       (lambda ()
-         (let ((dir (claude-code-ide--get-working-directory))
-               (mock-process 'mock-process))
-           ;; Initially no process
-           (should (null (claude-code-ide--get-process dir)))
+(ert-deftest claude-code-ide-test-session-management ()
+  "Test session storage and retrieval via the sessions hash table."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (claude-code-ide-tests--with-temp-directory
+     (lambda ()
+       (let* ((dir (claude-code-ide--get-working-directory))
+              (session-id "test-session-mgmt")
+              (mock-process (start-process "mock" nil "true"))
+              (session (make-claude-code-ide-session
+                        :session-id session-id
+                        :directory dir
+                        :process mock-process)))
+         ;; Initially no sessions for this directory
+         (should (null (claude-code-ide--sessions-for-directory dir)))
 
-           ;; Set a process
-           (claude-code-ide--set-process mock-process dir)
-           (should (eq (claude-code-ide--get-process dir) mock-process))
+         ;; Register a session
+         (puthash session-id session claude-code-ide--sessions)
+         (should (= 1 (length (claude-code-ide--sessions-for-directory dir))))
 
-           ;; Get process without specifying directory
-           (should (eq (claude-code-ide--get-process) mock-process)))))
-    (claude-code-ide-tests--clear-processes)))
+         ;; Retrieve the session
+         (let ((found (car (claude-code-ide--sessions-for-directory dir))))
+           (should (eq (claude-code-ide-session-process found) mock-process)))
 
-(ert-deftest claude-code-ide-test-cleanup-dead-processes ()
-  "Test cleanup of dead processes."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (let* ((live-process (make-process :name "test-live"
-                                         :command '("sleep" "10")
-                                         :buffer nil))
-             (dead-process-name "test-dead"))
-        ;; Create a mock dead process
-        (puthash "/dir1" live-process claude-code-ide--processes)
-        (puthash "/dir2" dead-process-name claude-code-ide--processes)
+         ;; Clean up process
+         (delete-process mock-process))))))
 
-        ;; Before cleanup
-        (should (= (hash-table-count claude-code-ide--processes) 2))
+(ert-deftest claude-code-ide-test-cleanup-dead-sessions ()
+  "Test cleanup of dead sessions from the sessions table."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (let* ((live-process (make-process :name "test-live"
+                                       :command '("sleep" "10")
+                                       :buffer nil))
+           (dead-process (start-process "test-dead" nil "true")))
+      ;; Wait for the dead process to finish
+      (while (process-live-p dead-process)
+        (sleep-for 0.1))
+      ;; Create sessions with live and dead processes
+      (puthash "live-session"
+               (make-claude-code-ide-session :session-id "live-session"
+                                             :directory "/dir1"
+                                             :process live-process)
+               claude-code-ide--sessions)
+      (puthash "dead-session"
+               (make-claude-code-ide-session :session-id "dead-session"
+                                             :directory "/dir2"
+                                             :process dead-process)
+               claude-code-ide--sessions)
 
-        ;; Run cleanup
-        (claude-code-ide--cleanup-dead-processes)
+      ;; Before cleanup
+      (should (= (hash-table-count claude-code-ide--sessions) 2))
 
-        ;; After cleanup - only live process remains
-        (should (= (hash-table-count claude-code-ide--processes) 1))
-        (should (gethash "/dir1" claude-code-ide--processes))
-        (should (null (gethash "/dir2" claude-code-ide--processes)))
+      ;; Run cleanup
+      (claude-code-ide--cleanup-dead-sessions)
 
-        ;; Clean up the live process
-        (delete-process live-process))
-    (claude-code-ide-tests--clear-processes)))
+      ;; After cleanup - only live session remains
+      (should (= (hash-table-count claude-code-ide--sessions) 1))
+      (should (gethash "live-session" claude-code-ide--sessions))
+      (should (null (gethash "dead-session" claude-code-ide--sessions)))
+
+      ;; Clean up the live process
+      (delete-process live-process))))
 
 ;;; Tests for CLI Detection
 
@@ -664,56 +677,49 @@ have completed before cleanup.  Waits up to 5 seconds."
 (ert-deftest claude-code-ide-test-run-with-cli ()
   "Test successful run command execution."
   (skip-unless nil) ; Skip this test for now
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (claude-code-ide-tests--with-temp-directory
-       (lambda ()
-         (let ((claude-code-ide--cli-available t)
-               (claude-code-ide-cli-path "echo"))
-           ;; Run claude-code-ide
-           (claude-code-ide)
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (claude-code-ide-tests--with-temp-directory
+     (lambda ()
+       (let ((claude-code-ide--cli-available t)
+             (claude-code-ide-cli-path "echo"))
+         ;; Run claude-code-ide
+         (claude-code-ide)
 
-           ;; Check that buffer was created
-           (let ((buffer-name (claude-code-ide--get-buffer-name)))
-             (should (get-buffer buffer-name))
+         ;; Check that buffer was created
+         (let ((buffer-name (claude-code-ide--get-buffer-name)))
+           (should (get-buffer buffer-name))
 
-             ;; Check that process was registered
-             (should (claude-code-ide--get-process))
+           ;; Check that a session was registered
+           (should (> (hash-table-count claude-code-ide--sessions) 0))
 
-             ;; Wait for process to finish and clean up
-             (claude-code-ide-tests--wait-for-process (get-buffer buffer-name))
-             ;; Kill the buffer explicitly since we're in batch mode
-             (when (get-buffer buffer-name)
-               (kill-buffer buffer-name))))))
-    (claude-code-ide-tests--clear-processes)))
+           ;; Wait for process to finish and clean up
+           (claude-code-ide-tests--wait-for-process (get-buffer buffer-name))
+           ;; Kill the buffer explicitly since we're in batch mode
+           (when (get-buffer buffer-name)
+             (kill-buffer buffer-name))))))))
 
 (ert-deftest claude-code-ide-test-run-existing-session ()
   "Test run command when session already exists."
   (skip-unless nil) ; Skip this test for now
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (claude-code-ide-tests--with-temp-directory
-       (lambda ()
-         (let ((claude-code-ide--cli-available t)
-               (claude-code-ide-cli-path "echo"))
-           ;; Start first session
-           (claude-code-ide)
-           (let* ((buffer-name (claude-code-ide--get-buffer-name))
-                  (first-buffer (get-buffer buffer-name)))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (claude-code-ide-tests--with-temp-directory
+     (lambda ()
+       (let ((claude-code-ide--cli-available t)
+             (claude-code-ide-cli-path "echo"))
+         ;; Start first session
+         (claude-code-ide)
+         (let* ((buffer-name (claude-code-ide--get-buffer-name))
+                (first-buffer (get-buffer buffer-name)))
 
-             ;; Verify we have the buffer
-             (should first-buffer)
+           ;; Verify we have the buffer
+           (should first-buffer)
 
-             ;; Try to run again - should not create new buffer
-             (claude-code-ide)
+           ;; Verify we have a session registered
+           (should (= 1 (hash-table-count claude-code-ide--sessions)))
 
-             ;; Should still have same buffer
-             (should (eq (get-buffer buffer-name) first-buffer))
-
-             ;; Wait for process and clean up
-             (claude-code-ide-tests--wait-for-process first-buffer)
-             (kill-buffer first-buffer)))))
-    (claude-code-ide-tests--clear-processes)))
+           ;; Wait for process and clean up
+           (claude-code-ide-tests--wait-for-process first-buffer)
+           (kill-buffer first-buffer)))))))
 
 (ert-deftest claude-code-ide-test-check-status ()
   "Test status check command."
@@ -754,160 +760,160 @@ have completed before cleanup.  Waits up to 5 seconds."
 
 (ert-deftest claude-code-ide-test-stop-no-session ()
   "Test stop command when no session is running."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (claude-code-ide-tests--with-temp-directory
-       (lambda ()
-         ;; Should not error when no session exists
-         (claude-code-ide-stop)))
-    (claude-code-ide-tests--clear-processes)))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (claude-code-ide-tests--with-temp-directory
+     (lambda ()
+       ;; Should not error when no session exists
+       (claude-code-ide-stop)))))
 
 (ert-deftest claude-code-ide-test-stop-with-session ()
   "Test stop command with active session."
   (skip-unless nil) ; Skip this test for now
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (claude-code-ide-tests--with-temp-directory
-       (lambda ()
-         (let ((claude-code-ide--cli-available t)
-               (claude-code-ide-cli-path "echo"))
-           ;; Start a session
-           (claude-code-ide)
-           (let ((buffer-name (claude-code-ide--get-buffer-name)))
-             ;; Verify session exists
-             (should (get-buffer buffer-name))
-             (should (claude-code-ide--get-process))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (claude-code-ide-tests--with-temp-directory
+     (lambda ()
+       (let ((claude-code-ide--cli-available t)
+             (claude-code-ide-cli-path "echo"))
+         ;; Start a session
+         (claude-code-ide)
+         (let ((buffer-name (claude-code-ide--get-buffer-name)))
+           ;; Verify session exists
+           (should (get-buffer buffer-name))
+           (should (> (hash-table-count claude-code-ide--sessions) 0))
 
-             ;; Wait for process to finish before stopping
-             (claude-code-ide-tests--wait-for-process (get-buffer buffer-name))
+           ;; Wait for process to finish before stopping
+           (claude-code-ide-tests--wait-for-process (get-buffer buffer-name))
 
-             ;; Stop the session
-             (claude-code-ide-stop)
+           ;; Stop the session
+           (claude-code-ide-stop)
 
-             ;; Verify session is stopped
-             (should (null (get-buffer buffer-name)))
-             (should (null (claude-code-ide--get-process)))))))
-    (claude-code-ide-tests--clear-processes)))
+           ;; Verify session is stopped
+           (should (null (get-buffer buffer-name)))
+           (should (= 0 (hash-table-count claude-code-ide--sessions)))))))))
 
 (ert-deftest claude-code-ide-test-switch-to-buffer-no-session ()
   "Test `switch-to-buffer' command when no session exists."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (should-error (claude-code-ide-switch-to-buffer)
-                    :type 'user-error)
-    (claude-code-ide-tests--clear-processes)))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (should-error (claude-code-ide-switch-to-buffer)
+                  :type 'user-error)))
 
 (ert-deftest claude-code-ide-test-toggle-window-functionality ()
   "Test that running claude-code-ide on an existing session toggles the window."
   (skip-unless nil) ; Skip this test for now
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (claude-code-ide-tests--with-temp-directory
-       (lambda ()
-         (let ((claude-code-ide--cli-available t)
-               (claude-code-ide-cli-path "echo")
-               (test-dir default-directory))
-           ;; Start a session
-           (claude-code-ide)
-           (let* ((buffer-name (claude-code-ide--get-buffer-name))
-                  (session-buffer (get-buffer buffer-name)))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (claude-code-ide-tests--with-temp-directory
+     (lambda ()
+       (let ((claude-code-ide--cli-available t)
+             (claude-code-ide-cli-path "echo")
+             (test-dir default-directory))
+         ;; Start a session
+         (claude-code-ide)
+         (let* ((buffer-name (claude-code-ide--get-buffer-name))
+                (session-buffer (get-buffer buffer-name)))
 
-             ;; Verify we have the buffer
-             (should session-buffer)
+           ;; Verify we have the buffer
+           (should session-buffer)
 
-             ;; Simulate window being visible (in batch mode we can't test actual windows)
-             ;; Just verify the command runs without error when session exists
-             (let ((default-directory test-dir))
-               ;; Running claude-code-ide again should toggle (not error)
-               (claude-code-ide))
+           ;; Simulate window being visible (in batch mode we can't test actual windows)
+           ;; Just verify the command runs without error when session exists
+           (let ((default-directory test-dir))
+             ;; Running claude-code-ide again should offer toggle (not error)
+             (cl-letf (((symbol-function 'completing-read)
+                        (lambda (&rest _) "New session")))
+               (claude-code-ide)))
 
-             ;; Wait for process and clean up
-             (claude-code-ide-tests--wait-for-process session-buffer)
-             (kill-buffer session-buffer)))))
-    (claude-code-ide-tests--clear-processes)))
+           ;; Wait for process and clean up
+           (claude-code-ide-tests--wait-for-process session-buffer)
+           (kill-buffer session-buffer)))))))
 
 (ert-deftest claude-code-ide-test-list-sessions-empty ()
   "Test listing sessions when none exist."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      ;; Should not error when no sessions exist
-      (claude-code-ide-list-sessions)
-    (claude-code-ide-tests--clear-processes)))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    ;; Should not error when no sessions exist
+    (claude-code-ide-list-sessions)))
 
 (ert-deftest claude-code-ide-test-list-sessions-with-sessions ()
   "Test listing sessions functionality."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (progn
-        ;; Test that list-sessions works with no sessions
-        (claude-code-ide-list-sessions)
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    ;; Test that list-sessions works with no sessions
+    (claude-code-ide-list-sessions)
 
-        ;; Manually add mock entries to the process table
-        (puthash "/tmp/project1" (current-buffer) claude-code-ide--processes)
-        (puthash "/tmp/project2" (current-buffer) claude-code-ide--processes)
+    ;; Manually add mock session entries
+    (let ((buf (current-buffer)))
+      (puthash "session-1"
+               (make-claude-code-ide-session :session-id "session-1"
+                                             :directory "/tmp/project1"
+                                             :buffer buf)
+               claude-code-ide--sessions)
+      (puthash "session-2"
+               (make-claude-code-ide-session :session-id "session-2"
+                                             :directory "/tmp/project2"
+                                             :buffer buf)
+               claude-code-ide--sessions))
 
-        ;; Verify we have 2 entries
-        (should (= (hash-table-count claude-code-ide--processes) 2))
+    ;; Verify we have 2 entries
+    (should (= (hash-table-count claude-code-ide--sessions) 2))
 
-        ;; List sessions should work without error
-        (claude-code-ide-list-sessions))
-    (claude-code-ide-tests--clear-processes)))
+    ;; List sessions should work without error
+    ;; Mock completing-read since we're in batch mode
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) nil)))
+      (claude-code-ide-list-sessions))))
 
 (ert-deftest claude-code-ide-test-toggle-recent ()
   "Test the toggle-recent functionality."
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (let ((test-buffer1 (get-buffer-create "*Claude Code - test1*"))
-            (test-buffer2 (get-buffer-create "*Claude Code - test2*"))
-            (claude-code-ide--last-accessed-buffer nil))
-        ;; Test when no recent buffer exists
-        (should-error (claude-code-ide-toggle-recent))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (let ((test-buffer1 (get-buffer-create "*Claude Code - test1*"))
+          (test-buffer2 (get-buffer-create "*Claude Code - test2*"))
+          (claude-code-ide--last-accessed-buffer nil))
+      (unwind-protect
+          (progn
+            ;; Test when no recent buffer exists
+            (should-error (claude-code-ide-toggle-recent))
 
-        ;; Set a recent buffer
-        (setq claude-code-ide--last-accessed-buffer test-buffer1)
+            ;; Set a recent buffer
+            (setq claude-code-ide--last-accessed-buffer test-buffer1)
 
-        ;; Test toggle when no windows are visible (should show the buffer)
-        ;; This will fail in batch mode but verifies the function doesn't error
-        (condition-case nil
-            (claude-code-ide-toggle-recent)
-          (error nil))
-
+            ;; Test toggle when no windows are visible (should show the buffer)
+            ;; This will fail in batch mode but verifies the function doesn't error
+            (condition-case nil
+                (claude-code-ide-toggle-recent)
+              (error nil)))
         ;; Clean up
         (kill-buffer test-buffer1)
-        (kill-buffer test-buffer2))
-    (claude-code-ide-tests--clear-processes)))
+        (kill-buffer test-buffer2)))))
 
 ;;; Edge Case Tests
 
 (ert-deftest claude-code-ide-test-concurrent-sessions ()
   "Test managing multiple concurrent sessions."
   (skip-unless nil) ; Skip this test for now
-  (claude-code-ide-tests--clear-processes)
-  (unwind-protect
-      (let ((claude-code-ide--cli-available t)
-            (claude-code-ide-cli-path "echo")
-            (dir1 (make-temp-file "claude-test-1" t))
-            (dir2 (make-temp-file "claude-test-2" t)))
-        ;; Start sessions in different directories
-        (let ((default-directory dir1))
-          (claude-code-ide)
-          (should (claude-code-ide--get-process dir1)))
-        (let ((default-directory dir2))
-          (claude-code-ide)
-          (should (claude-code-ide--get-process dir2)))
-        ;; Verify both sessions exist
-        (should (= (hash-table-count claude-code-ide--processes) 2))
-        ;; Clean up
-        (let ((buffers (mapcar (lambda (dir)
-                                 (funcall claude-code-ide-buffer-name-function dir))
-                               (list dir1 dir2))))
-          (dolist (buffer-name buffers)
-            (when-let ((buffer (get-buffer buffer-name)))
-              (claude-code-ide-tests--wait-for-process buffer)
-              (kill-buffer buffer))))
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (let ((claude-code-ide--cli-available t)
+          (claude-code-ide-cli-path "echo")
+          (dir1 (make-temp-file "claude-test-1" t))
+          (dir2 (make-temp-file "claude-test-2" t)))
+      (unwind-protect
+          (progn
+            ;; Start sessions in different directories
+            (let ((default-directory dir1))
+              (claude-code-ide)
+              (should (> (length (claude-code-ide--sessions-for-directory dir1)) 0)))
+            (let ((default-directory dir2))
+              (claude-code-ide)
+              (should (> (length (claude-code-ide--sessions-for-directory dir2)) 0)))
+            ;; Verify both sessions exist
+            (should (= (hash-table-count claude-code-ide--sessions) 2))
+            ;; Clean up
+            (let ((buffers (mapcar (lambda (dir)
+                                     (funcall claude-code-ide-buffer-name-function dir))
+                                   (list dir1 dir2))))
+              (dolist (buffer-name buffers)
+                (when-let ((buffer (get-buffer buffer-name)))
+                  (claude-code-ide-tests--wait-for-process buffer)
+                  (kill-buffer buffer)))))
         (delete-directory dir1 t)
-        (delete-directory dir2 t))
-    (claude-code-ide-tests--clear-processes)))
+        (delete-directory dir2 t)))))
 
 (ert-deftest claude-code-ide-test-custom-buffer-naming ()
   "Test custom buffer naming function."
