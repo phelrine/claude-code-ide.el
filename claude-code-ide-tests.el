@@ -274,7 +274,30 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((session-named (make-claude-code-ide-session
                         :session-id "s2" :name "design" :directory "/tmp/my-project/")))
     (should (equal "*claude-code[my-project:design]*"
-                   (claude-code-ide--buffer-name-for-session session-named)))))
+                   (claude-code-ide--buffer-name-for-session session-named))))
+  ;; Auto-numbered sessions get number as name
+  (let ((session-numbered (make-claude-code-ide-session
+                           :session-id "s3" :name "2" :directory "/tmp/my-project/")))
+    (should (equal "*claude-code[my-project:2]*"
+                   (claude-code-ide--buffer-name-for-session session-numbered)))))
+
+(ert-deftest claude-code-ide-test-next-session-number ()
+  "Test automatic session numbering."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    ;; No sessions yet -- should return nil
+    (should (null (claude-code-ide--next-session-number "/tmp/proj/")))
+    ;; One session exists -- next should be 2
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1" :directory "/tmp/proj/")
+             claude-code-ide--sessions)
+    (should (= 2 (claude-code-ide--next-session-number "/tmp/proj/")))
+    ;; Two sessions exist -- next should be 3
+    (puthash "s2" (make-claude-code-ide-session
+                   :session-id "s2" :directory "/tmp/proj/")
+             claude-code-ide--sessions)
+    (should (= 3 (claude-code-ide--next-session-number "/tmp/proj/")))
+    ;; Different directory -- unaffected
+    (should (null (claude-code-ide--next-session-number "/tmp/other/")))))
 
 ;;; Tests for Helper Functions
 

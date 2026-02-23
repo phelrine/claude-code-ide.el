@@ -121,6 +121,13 @@
   "Return the number of active sessions for DIR."
   (length (claude-code-ide--sessions-for-directory dir)))
 
+(defun claude-code-ide--next-session-number (dir)
+  "Return the next available session number for DIR.
+Returns nil if no sessions exist yet, or the next number otherwise."
+  (let ((sessions (claude-code-ide--sessions-for-directory dir)))
+    (when sessions
+      (1+ (length sessions)))))
+
 (defun claude-code-ide--buffer-name-for-session (session)
   "Generate buffer name for SESSION."
   (let* ((dir (claude-code-ide-session-directory session))
@@ -957,9 +964,12 @@ handled by the caller (`claude-code-ide' command)."
                              (format-time-string "%Y%m%d-%H%M%S")))
          (port nil))
     (condition-case err
-        (let ((session (make-claude-code-ide-session
-                        :session-id session-id
-                        :directory working-dir)))
+        (let* ((session-number (claude-code-ide--next-session-number working-dir))
+               (session (make-claude-code-ide-session
+                         :session-id session-id
+                         :directory working-dir
+                         :name (when session-number
+                                 (number-to-string session-number)))))
           ;; Register session in global table before starting MCP
           (puthash session-id session claude-code-ide--sessions)
           ;; Apply reflow glitch advice if this is the first session
