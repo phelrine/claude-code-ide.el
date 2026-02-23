@@ -29,6 +29,7 @@
 
 (require 'transient)
 (require 'claude-code-ide-debug)
+(require 'claude-code-ide-session)
 
 ;; Declare functions from other files to avoid circular dependencies
 (declare-function claude-code-ide "claude-code-ide" ())
@@ -46,11 +47,6 @@
 (declare-function claude-code-ide--ensure-cli "claude-code-ide" ())
 (declare-function claude-code-ide-rename-session "claude-code-ide" (new-name))
 (declare-function claude-code-ide-mcp--active-sessions "claude-code-ide-mcp" ())
-(declare-function claude-code-ide-session-directory "claude-code-ide" (session))
-(declare-function claude-code-ide-session-port "claude-code-ide" (session))
-(declare-function claude-code-ide-session-client "claude-code-ide" (session))
-(declare-function claude-code-ide-session-buffer "claude-code-ide" (session))
-(declare-function claude-code-ide-session-last-buffer "claude-code-ide" (session))
 (declare-function claude-code-ide-mcp--get-current-session "claude-code-ide-mcp" ())
 (declare-function claude-code-ide--get-working-directory "claude-code-ide" ())
 

@@ -61,37 +61,7 @@
 (require 'cl-lib)
 (require 'project)
 (require 'claude-code-ide-debug)
-
-;;; Session Structure
-;;
-;; Defined early so that `claude-code-ide-mcp' (required below) can
-;; use the struct accessors and `setf' forms at load time.
-
-(cl-defstruct claude-code-ide-session
-  "Unified structure holding all state for a single Claude Code session.
-Replaces the former separate `claude-code-ide-mcp-session' struct
-and the directory-keyed process/session-id hash tables."
-  session-id        ; unique identifier, e.g. "claude-project-20260223-143000"
-  name              ; user-facing display name (e.g. "design"), nil for default
-  directory         ; expanded project root path
-  ;; Process & buffer
-  process           ; terminal process
-  buffer            ; terminal buffer
-  ;; MCP state
-  port              ; WebSocket server port
-  server            ; WebSocket server object
-  client            ; connected WebSocket client
-  ping-timer        ; keepalive timer
-  selection-timer   ; selection change debounce timer
-  last-selection    ; last selection state for change detection
-  last-buffer       ; last active buffer for change detection
-  deferred          ; hash-table of deferred responses
-  active-diffs      ; hash-table of active ediff sessions
-  original-tab)     ; tab-bar tab where session was started
-
-(defvar claude-code-ide--sessions (make-hash-table :test 'equal)
-  "Hash table mapping session-id to `claude-code-ide-session' structs.
-This is the single source of truth for all active sessions.")
+(require 'claude-code-ide-session)
 
 (require 'claude-code-ide-mcp)
 (require 'claude-code-ide-transient)
@@ -1002,7 +972,7 @@ handled by the caller (`claude-code-ide' command)."
           ;; Generate buffer name for this session
           (let* ((buffer-name (claude-code-ide--buffer-name-for-session session))
                  (buffer-and-process (claude-code-ide--create-terminal-session
-                                     buffer-name working-dir port continue resume session-id))
+                                      buffer-name working-dir port continue resume session-id))
                  (buffer (car buffer-and-process))
                  (process (cdr buffer-and-process)))
             ;; Store process and buffer in session struct

@@ -10,6 +10,7 @@ This package integrates Claude Code CLI with Emacs via WebSocket and the Model C
 
 **Core Files:**
 - `claude-code-ide.el` - Main entry: user commands, session management, terminal buffers
+- `claude-code-ide-session.el` - Session struct definition (separate file for byte-compilation)
 - `claude-code-ide-mcp.el` - WebSocket server, JSON-RPC handling, session state
 - `claude-code-ide-mcp-handlers.el` - MCP tool implementations (file ops, ediff, diagnostics)
 
