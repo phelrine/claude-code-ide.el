@@ -22,10 +22,7 @@
 
 (defun claude-code-ide-dashboard--format-status (status)
   "Format STATUS symbol for display."
-  (pcase (or status 'active)
-    ('active "working")
-    ('idle "idle")
-    (other (symbol-name other))))
+  (symbol-name (or status 'idle)))
 
 (defun claude-code-ide-dashboard--truncate-message (msg)
   "Truncate MSG to a single line within `claude-code-ide-dashboard-message-max-length'."

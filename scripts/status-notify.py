@@ -114,7 +114,7 @@ def main():
     if event in ("Stop", "PreToolUse"):
         status = "idle"
     else:
-        status = "active"
+        status = "working"
 
     # Map event to message
     message = None

@@ -228,10 +228,10 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((session (make-claude-code-ide-session
                   :session-id "s1"
                   :directory "/tmp/proj/"
-                  :status 'active
+                  :status 'working
                   :last-message "Reading file"
                   :status-updated-at 1000.0)))
-    (should (eq (claude-code-ide-session-status session) 'active))
+    (should (eq (claude-code-ide-session-status session) 'working))
     (should (equal (claude-code-ide-session-last-message session) "Reading file"))
     (should (= (claude-code-ide-session-status-updated-at session) 1000.0))))
 
@@ -240,7 +240,7 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((session (make-claude-code-ide-session
                   :session-id "s1"
                   :directory "/tmp/proj/")))
-    (should (eq (claude-code-ide-session-status session) 'active))
+    (should (eq (claude-code-ide-session-status session) 'idle))
     (should (null (claude-code-ide-session-last-message session)))
     (should (null (claude-code-ide-session-status-updated-at session)))))
 
@@ -2582,7 +2582,7 @@ have completed before cleanup.  Waits up to 5 seconds."
         (session (make-claude-code-ide-session
                   :session-id "s1"
                   :directory "/tmp/proj/"
-                  :status 'active)))
+                  :status 'working)))
     (puthash "s1" session claude-code-ide--sessions)
     ;; Pass session directly (new signature)
     (claude-code-ide-mcp--handle-status-changed
@@ -2608,7 +2608,7 @@ have completed before cleanup.  Waits up to 5 seconds."
         (session (make-claude-code-ide-session
                   :session-id "s1"
                   :directory "/tmp/proj/"
-                  :status 'active)))
+                  :status 'working)))
     (puthash "s1" session claude-code-ide--sessions)
     ;; Old-style call: no session param, session_id in params
     (claude-code-ide-mcp--handle-status-changed
@@ -2636,7 +2636,7 @@ have completed before cleanup.  Waits up to 5 seconds."
                    :session-id "s2"
                    :name "coding"
                    :directory "/tmp/my-project/"
-                   :status 'active
+                   :status 'working
                    :last-message "Edit main.py")
              claude-code-ide--sessions)
     ;; Mock cleanup so it doesn't remove process-less test sessions
@@ -2672,7 +2672,7 @@ have completed before cleanup.  Waits up to 5 seconds."
                    :session-id "s1"
                    :name nil
                    :directory "/tmp/proj/"
-                   :status 'active
+                   :status 'working
                    :last-message nil)
              claude-code-ide--sessions)
     (cl-letf (((symbol-function 'claude-code-ide--cleanup-dead-sessions)
@@ -2760,9 +2760,9 @@ have completed before cleanup.  Waits up to 5 seconds."
 
 (ert-deftest claude-code-ide-test-dashboard-format-status ()
   "Test status formatting for dashboard display."
-  (should (equal "working" (claude-code-ide-dashboard--format-status 'active)))
+  (should (equal "working" (claude-code-ide-dashboard--format-status 'working)))
   (should (equal "idle" (claude-code-ide-dashboard--format-status 'idle)))
-  (should (equal "working" (claude-code-ide-dashboard--format-status nil)))
+  (should (equal "idle" (claude-code-ide-dashboard--format-status nil)))
   (should (equal "unknown" (claude-code-ide-dashboard--format-status 'unknown))))
 
 (ert-deftest claude-code-ide-test-dashboard-truncate-message ()
@@ -2802,13 +2802,13 @@ have completed before cleanup.  Waits up to 5 seconds."
 (ert-deftest claude-code-ide-test-status-lifecycle ()
   "Test full status update lifecycle."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
-    ;; Create session (starts as active)
+    ;; Create session (starts as idle)
     (puthash "s1" (make-claude-code-ide-session
                    :session-id "s1"
                    :directory "/tmp/proj/")
              claude-code-ide--sessions)
     (let ((session (gethash "s1" claude-code-ide--sessions)))
-      (should (eq (claude-code-ide-session-status session) 'active))
+      (should (eq (claude-code-ide-session-status session) 'idle))
       ;; Simulate Stop hook -> idle (pass session directly)
       (claude-code-ide-mcp--handle-status-changed
        '((status . "idle") (message . "All done"))
@@ -2823,9 +2823,9 @@ have completed before cleanup.  Waits up to 5 seconds."
       (should (equal (claude-code-ide-session-last-message session) "Edit"))
       ;; Simulate PostToolUse hook -> active (tool executing)
       (claude-code-ide-mcp--handle-status-changed
-       '((status . "active") (message . "Edit"))
+       '((status . "working") (message . "Edit"))
        session)
-      (should (eq (claude-code-ide-session-status session) 'active))
+      (should (eq (claude-code-ide-session-status session) 'working))
       (should (equal (claude-code-ide-session-last-message session) "Edit")))))
 
 (provide 'claude-code-ide-tests)

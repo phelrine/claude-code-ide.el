@@ -410,7 +410,7 @@ looking up session_id from PARAMS for backward compatibility."
                (or session
                    (when-let ((session-id (alist-get 'session_id params)))
                      (gethash session-id claude-code-ide--sessions)))))
-    (let ((status (intern (alist-get 'status params "active")))
+    (let ((status (intern (alist-get 'status params "working")))
           (message (alist-get 'message params)))
       (setf (claude-code-ide-session-status resolved-session) status)
       (when message

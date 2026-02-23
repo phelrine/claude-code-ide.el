@@ -34,7 +34,7 @@ and the directory-keyed process/session-id hash tables."
   deferred          ; hash-table of deferred responses
   active-diffs      ; hash-table of active ediff sessions
   ;; Status tracking
-  (status 'active)    ; symbol: active or idle
+  (status 'idle)      ; symbol: idle or working
   last-message        ; string: last assistant message or tool name
   status-updated-at   ; float-time: timestamp of last status update
   original-tab)     ; tab-bar tab where session was started
