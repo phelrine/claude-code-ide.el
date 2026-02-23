@@ -2650,7 +2650,12 @@ have completed before cleanup.  Waits up to 5 seconds."
           (should (stringp (aref cols 0)))  ; name
           (should (stringp (aref cols 1)))  ; directory
           (should (stringp (aref cols 2)))  ; status
-          (should (stringp (aref cols 3))))))))  ; last-message
+          (should (stringp (aref cols 3)))  ; last-message
+          ;; Verify status formatting
+          (should (equal "idle" (aref cols 2))))
+        (let* ((entry (cadr entries))
+               (cols (cadr entry)))
+          (should (equal "working" (aref cols 2))))))))
 
 (ert-deftest claude-code-ide-test-dashboard-entries-empty ()
   "Test that dashboard returns empty list with no sessions."
@@ -2752,6 +2757,27 @@ have completed before cleanup.  Waits up to 5 seconds."
             ;; Should still have exactly one hook-group per event
             (should (= 1 (length stop-hooks)))))
       (delete-directory tmpdir t))))
+
+(ert-deftest claude-code-ide-test-dashboard-format-status ()
+  "Test status formatting for dashboard display."
+  (should (equal "working" (claude-code-ide-dashboard--format-status 'active)))
+  (should (equal "idle" (claude-code-ide-dashboard--format-status 'idle)))
+  (should (equal "working" (claude-code-ide-dashboard--format-status nil)))
+  (should (equal "unknown" (claude-code-ide-dashboard--format-status 'unknown))))
+
+(ert-deftest claude-code-ide-test-dashboard-truncate-message ()
+  "Test message truncation for dashboard display."
+  (let ((claude-code-ide-dashboard-message-max-length 20))
+    ;; Short message: no truncation
+    (should (equal "hello" (claude-code-ide-dashboard--truncate-message "hello")))
+    ;; Nil: empty string
+    (should (equal "" (claude-code-ide-dashboard--truncate-message nil)))
+    ;; Newlines replaced with spaces
+    (should (equal "line1 line2" (claude-code-ide-dashboard--truncate-message "line1\nline2")))
+    ;; Long message: truncated with ellipsis
+    (let ((result (claude-code-ide-dashboard--truncate-message "this is a very long message indeed")))
+      (should (= 20 (length result)))
+      (should (string-suffix-p "…" result)))))
 
 ;;; Integration Tests
 

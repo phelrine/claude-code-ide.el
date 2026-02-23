@@ -12,13 +12,28 @@
 (require 'cl-lib)
 (require 'tabulated-list)
 (require 'claude-code-ide-session)
-(declare-function claude-code-ide--display-buffer-in-side-window "claude-code-ide" (buffer))
-(declare-function claude-code-ide-stop "claude-code-ide" ())
-(declare-function claude-code-ide--cleanup-dead-sessions "claude-code-ide" ())
-(declare-function claude-code-ide--buffer-name-for-session "claude-code-ide" (session))
+(require 'claude-code-ide)
 
 (defvar claude-code-ide-dashboard-buffer-name "*claude-code-dashboard*"
   "Name of the session dashboard buffer.")
+
+(defvar claude-code-ide-dashboard-message-max-length 60
+  "Maximum length for the last activity message in the dashboard.")
+
+(defun claude-code-ide-dashboard--format-status (status)
+  "Format STATUS symbol for display."
+  (pcase (or status 'active)
+    ('active "working")
+    ('idle "idle")
+    (other (symbol-name other))))
+
+(defun claude-code-ide-dashboard--truncate-message (msg)
+  "Truncate MSG to a single line within `claude-code-ide-dashboard-message-max-length'."
+  (let* ((oneline (replace-regexp-in-string "[\n\r]+" " " (or msg "")))
+         (max claude-code-ide-dashboard-message-max-length))
+    (if (<= (length oneline) max)
+        oneline
+      (concat (substring oneline 0 (- max 1)) "…"))))
 
 (defun claude-code-ide-dashboard--entries ()
   "Generate tabulated-list entries from active sessions."
@@ -30,9 +45,10 @@
                         (claude-code-ide-session-session-id session)))
               (dir (abbreviate-file-name
                     (claude-code-ide-session-directory session)))
-              (status (symbol-name
-                       (or (claude-code-ide-session-status session) 'active)))
-              (msg (or (claude-code-ide-session-last-message session) "")))
+              (status (claude-code-ide-dashboard--format-status
+                       (claude-code-ide-session-status session)))
+              (msg (claude-code-ide-dashboard--truncate-message
+                    (claude-code-ide-session-last-message session))))
          (push (list id (vector name dir status msg)) entries)))
      claude-code-ide--sessions)
     (nreverse entries)))
