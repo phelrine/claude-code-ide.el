@@ -44,6 +44,7 @@
 (declare-function claude-code-ide-toggle "claude-code-ide" ())
 (declare-function claude-code-ide-check-status "claude-code-ide" ())
 (declare-function claude-code-ide--ensure-cli "claude-code-ide" ())
+(declare-function claude-code-ide-rename-session "claude-code-ide" (new-name))
 (declare-function claude-code-ide-mcp--active-sessions "claude-code-ide-mcp" ())
 (declare-function claude-code-ide-session-directory "claude-code-ide" (session))
 (declare-function claude-code-ide-session-port "claude-code-ide" (session))
@@ -54,6 +55,7 @@
 (declare-function claude-code-ide--get-working-directory "claude-code-ide" ())
 
 ;; Declare variables
+(defvar claude-code-ide--sessions)
 (defvar claude-code-ide-cli-path)
 (defvar claude-code-ide-debug)
 (defvar claude-code-ide-window-side)
@@ -128,8 +130,10 @@
   (if-let ((session (claude-code-ide-mcp--get-current-session)))
       (let* ((project-dir (claude-code-ide-session-directory session))
              (project-name (file-name-nondirectory (directory-file-name project-dir)))
-             (connected (if (claude-code-ide-session-client session) "connected" "disconnected")))
-        (propertize (format "Active session in [%s] - %s" project-name connected)
+             (connected (if (claude-code-ide-session-client session) "connected" "disconnected"))
+             (total (hash-table-count claude-code-ide--sessions)))
+        (propertize (format "Active session in [%s] - %s (%d total)"
+                            project-name connected total)
                     'face 'success))
     (propertize "No active session" 'face 'transient-inactive-value)))
 
@@ -322,7 +326,8 @@ Otherwise, if multiple sessions exist, prompt for selection."
     ("c" claude-code-ide--continue-if-no-session :description claude-code-ide--continue-description)
     ("r" claude-code-ide--resume-if-no-session :description claude-code-ide--resume-description)
     ("q" "Stop current session" claude-code-ide-stop)
-    ("l" "List all sessions" claude-code-ide-list-sessions)]
+    ("l" "List all sessions" claude-code-ide-list-sessions)
+    ("R" "Rename session" claude-code-ide-rename-session)]
    ["Navigation"
     ("b" "Switch to Claude buffer" claude-code-ide-switch-to-buffer)
     ("w" "Toggle window visibility" claude-code-ide-toggle-window)
