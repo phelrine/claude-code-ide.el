@@ -76,50 +76,16 @@
 (defun claude-code-ide--start-description ()
   "Dynamic description for start command based on session status."
   (if (claude-code-ide--has-active-session-p)
-      (propertize "Start new Claude Code session (session already running)"
-                  'face 'transient-inactive-value)
+      "Start/toggle Claude Code session"
     "Start new Claude Code session"))
-
-(defun claude-code-ide--start-if-no-session ()
-  "Start Claude Code only if no session is active for current buffer."
-  (interactive)
-  (if (claude-code-ide--has-active-session-p)
-      (let ((working-dir (claude-code-ide--get-working-directory)))
-        (claude-code-ide-log "Claude Code session already running in %s"
-                             (abbreviate-file-name working-dir)))
-    (claude-code-ide)))
 
 (defun claude-code-ide--continue-description ()
   "Dynamic description for continue command based on session status."
-  (if (claude-code-ide--has-active-session-p)
-      (propertize "Continue most recent conversation (session already running)"
-                  'face 'transient-inactive-value)
-    "Continue most recent conversation"))
-
-(defun claude-code-ide--continue-if-no-session ()
-  "Continue Claude Code only if no session is active for current buffer."
-  (interactive)
-  (if (claude-code-ide--has-active-session-p)
-      (let ((working-dir (claude-code-ide--get-working-directory)))
-        (claude-code-ide-log "Claude Code session already running in %s"
-                             (abbreviate-file-name working-dir)))
-    (claude-code-ide-continue)))
+  "Continue most recent conversation")
 
 (defun claude-code-ide--resume-description ()
   "Dynamic description for resume command based on session status."
-  (if (claude-code-ide--has-active-session-p)
-      (propertize "Resume session (session already running)"
-                  'face 'transient-inactive-value)
-    "Resume session (from previous conversation)"))
-
-(defun claude-code-ide--resume-if-no-session ()
-  "Resume Claude Code only if no session is active for current buffer."
-  (interactive)
-  (if (claude-code-ide--has-active-session-p)
-      (let ((working-dir (claude-code-ide--get-working-directory)))
-        (claude-code-ide-log "Claude Code session already running in %s"
-                             (abbreviate-file-name working-dir)))
-    (claude-code-ide-resume)))
+  "Resume session (from previous conversation)")
 
 (defun claude-code-ide--session-status ()
   "Return a string describing the current session status."
@@ -318,9 +284,9 @@ Otherwise, if multiple sessions exist, prompt for selection."
   [:description claude-code-ide--session-status]
   ["Claude Code IDE"
    ["Session Management"
-    ("s" claude-code-ide--start-if-no-session :description claude-code-ide--start-description)
-    ("c" claude-code-ide--continue-if-no-session :description claude-code-ide--continue-description)
-    ("r" claude-code-ide--resume-if-no-session :description claude-code-ide--resume-description)
+    ("s" claude-code-ide :description claude-code-ide--start-description)
+    ("c" claude-code-ide-continue :description claude-code-ide--continue-description)
+    ("r" claude-code-ide-resume :description claude-code-ide--resume-description)
     ("q" "Stop current session" claude-code-ide-stop)
     ("l" "List all sessions" claude-code-ide-list-sessions)
     ("R" "Rename session" claude-code-ide-rename-session)]
