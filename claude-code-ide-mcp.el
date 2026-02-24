@@ -457,6 +457,7 @@ looking up session_id from PARAMS for backward compatibility."
             (pcase event
               ("Stop"
                (setf (claude-code-ide-session-stopped resolved-session) t)
+               (setf (claude-code-ide-session-pending-permissions resolved-session) 0)
                (setf (claude-code-ide-session-permission-request-count resolved-session) 0)
                (setf (claude-code-ide-session-permission-pending resolved-session) nil)
                (claude-code-ide-mcp--cancel-permission-timer resolved-session))
@@ -950,6 +951,7 @@ Sets the port and server fields on the session struct.  Returns the port."
         (cancel-timer ping-timer))
       (when-let ((sel-timer (claude-code-ide-session-selection-timer session)))
         (cancel-timer sel-timer))
+      (claude-code-ide-mcp--cancel-permission-timer session)
       ;; Remove lockfile
       (when-let ((port (claude-code-ide-session-port session)))
         (claude-code-ide-debug "Removing lockfile for port %d" port)
