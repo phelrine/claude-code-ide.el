@@ -2638,17 +2638,22 @@ have completed before cleanup.  Waits up to 5 seconds."
     (claude-code-ide-mcp--handle-status-changed
      '((event . "PreToolUse") (message . "Agent B: Write")) session)
     (should (= (claude-code-ide-session-pending-permissions session) 2))
+    (should (= (claude-code-ide-session-permission-request-count session) 2))
     (should (eq (claude-code-ide-session-status session) 'idle))
     ;; Agent A approved
     (claude-code-ide-mcp--handle-status-changed
      '((event . "PostToolUse") (message . "Agent A done")) session)
     (should (= (claude-code-ide-session-pending-permissions session) 1))
+    (should (= (claude-code-ide-session-permission-request-count session) 1))
     (should (eq (claude-code-ide-session-status session) 'idle))
     ;; Agent B approved
     (claude-code-ide-mcp--handle-status-changed
      '((event . "PostToolUse") (message . "Agent B done")) session)
     (should (= (claude-code-ide-session-pending-permissions session) 0))
-    (should (eq (claude-code-ide-session-status session) 'working))))
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-pending session)))
+    (should (eq (claude-code-ide-session-status session) 'working))
+    (claude-code-ide-mcp--cancel-permission-timer session)))
 
 (ert-deftest claude-code-ide-test-status-stop-survives-subagent ()
   "Test that Stop event is not cleared by a subsequent PostToolUse."
@@ -2662,6 +2667,8 @@ have completed before cleanup.  Waits up to 5 seconds."
      '((event . "Stop") (message . "Finished")) session)
     (should (eq (claude-code-ide-session-stopped session) t))
     (should (eq (claude-code-ide-session-status session) 'idle))
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-pending session)))
     ;; Subagent finishes (PostToolUse arrives after Stop)
     (claude-code-ide-mcp--handle-status-changed
      '((event . "PostToolUse") (message . "Subagent done")) session)
@@ -2680,6 +2687,8 @@ have completed before cleanup.  Waits up to 5 seconds."
     (claude-code-ide-mcp--handle-status-changed
      '((event . "PostToolUse") (message . "Unexpected")) session)
     (should (= (claude-code-ide-session-pending-permissions session) 0))
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-pending session)))
     (should (eq (claude-code-ide-session-status session) 'working))))
 
 (ert-deftest claude-code-ide-test-status-no-event-field-backward-compat ()
@@ -3080,12 +3089,15 @@ have completed before cleanup.  Waits up to 5 seconds."
       (should (eq (claude-code-ide-session-status session) 'working))
       (should (eq (claude-code-ide-session-stopped session) nil))
       (should (= (claude-code-ide-session-pending-permissions session) 0))
+      (should (= (claude-code-ide-session-permission-request-count session) 0))
+      (should (null (claude-code-ide-session-permission-pending session)))
       ;; PreToolUse -> idle (permission prompt)
       (claude-code-ide-mcp--handle-status-changed
        '((status . "idle") (event . "PreToolUse") (message . "Edit"))
        session)
       (should (eq (claude-code-ide-session-status session) 'idle))
       (should (= (claude-code-ide-session-pending-permissions session) 1))
+      (should (= (claude-code-ide-session-permission-request-count session) 1))
       (should (equal (claude-code-ide-session-last-message session) "Edit"))
       ;; PostToolUse -> working (permission granted)
       (claude-code-ide-mcp--handle-status-changed
@@ -3093,13 +3105,18 @@ have completed before cleanup.  Waits up to 5 seconds."
        session)
       (should (eq (claude-code-ide-session-status session) 'working))
       (should (= (claude-code-ide-session-pending-permissions session) 0))
+      (should (= (claude-code-ide-session-permission-request-count session) 0))
+      (should (null (claude-code-ide-session-permission-pending session)))
       ;; Stop -> idle (finished)
       (claude-code-ide-mcp--handle-status-changed
        '((status . "idle") (event . "Stop") (message . "All done"))
        session)
       (should (eq (claude-code-ide-session-status session) 'idle))
       (should (eq (claude-code-ide-session-stopped session) t))
-      (should (equal (claude-code-ide-session-last-message session) "All done")))))
+      (should (= (claude-code-ide-session-permission-request-count session) 0))
+      (should (null (claude-code-ide-session-permission-pending session)))
+      (should (equal (claude-code-ide-session-last-message session) "All done"))
+      (claude-code-ide-mcp--cancel-permission-timer session))))
 
 (provide 'claude-code-ide-tests)
 
