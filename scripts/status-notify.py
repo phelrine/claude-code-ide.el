@@ -126,7 +126,7 @@ def main():
         message = hook_data.get("tool_name")
 
     # Build JSON-RPC notification
-    params = {"status": status}
+    params = {"status": status, "event": event}
     if message is not None:
         params["message"] = message
 
