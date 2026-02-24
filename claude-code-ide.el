@@ -755,9 +755,9 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
 
 (defun claude-code-ide--package-scripts-dir ()
   "Return the path to the scripts/ directory within this package."
-  (let ((pkg-dir (file-name-directory (or load-file-name
-                                          (locate-library "claude-code-ide")
-                                          (buffer-file-name)))))
+  (let ((pkg-dir (file-name-directory (file-truename (or load-file-name
+                                                         (locate-library "claude-code-ide")
+                                                         (buffer-file-name))))))
     (expand-file-name "scripts/" pkg-dir)))
 
 (defconst claude-code-ide--status-hook-command "python3 ~/.claude/hooks/status-notify.py"

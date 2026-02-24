@@ -448,7 +448,7 @@ looking up session_id from PARAMS for backward compatibility."
               (claude-code-ide-mcp--handle-prompts-list id params))
              ((string= method "session/statusChanged")
               (claude-code-ide-debug "Handling session/statusChanged notification")
-              (claude-code-ide-mcp--handle-status-changed params)
+              (claude-code-ide-mcp--handle-status-changed params session)
               nil)  ; notification, no response needed
              ;; Unknown method
              (id

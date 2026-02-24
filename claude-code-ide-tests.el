@@ -2720,6 +2720,43 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (stringp scripts-dir))
     (should (string-suffix-p "scripts/" scripts-dir))))
 
+(ert-deftest claude-code-ide-test-package-scripts-dir-resolves-symlink ()
+  "Test that package-scripts-dir resolves symlinks to the real path."
+  (let* ((tmpdir (make-temp-file "claude-test-" t))
+         (real-dir (expand-file-name "real/" tmpdir))
+         (real-file (expand-file-name "claude-code-ide.el" real-dir))
+         (link-dir (expand-file-name "link/" tmpdir))
+         (link-file (expand-file-name "claude-code-ide.el" link-dir)))
+    (unwind-protect
+        (progn
+          (make-directory real-dir t)
+          (make-directory link-dir t)
+          (with-temp-file real-file
+            (insert ";; dummy"))
+          (make-symbolic-link real-file link-file t)
+          ;; Simulate loading from symlinked path
+          (let ((load-file-name link-file))
+            (let ((result (claude-code-ide--package-scripts-dir)))
+              ;; Should resolve to real-dir, not link-dir
+              (should (string-prefix-p (file-truename real-dir) (file-truename result))))))
+      (delete-directory tmpdir t))))
+
+(ert-deftest claude-code-ide-test-handle-message-forwards-session-to-status-changed ()
+  "Test that handle-message forwards session to handle-status-changed."
+  (let* ((captured-session nil)
+         (test-session (make-claude-code-ide-session
+                        :session-id "test-sess"
+                        :directory "/tmp/proj/"))
+         (message `((jsonrpc . "2.0")
+                    (method . "session/statusChanged")
+                    (params . ((status . "working")
+                               (message . "Editing"))))))
+    (cl-letf (((symbol-function 'claude-code-ide-mcp--handle-status-changed)
+               (lambda (params session)
+                 (setq captured-session session))))
+      (claude-code-ide-mcp--handle-message message test-session)
+      (should (eq captured-session test-session)))))
+
 (ert-deftest claude-code-ide-test-setup-status-hooks ()
   "Test that setup-status-hooks copies script and merges settings."
   (let* ((tmpdir (make-temp-file "claude-test-" t))
