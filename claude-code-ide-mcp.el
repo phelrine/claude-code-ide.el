@@ -399,6 +399,13 @@ Optional SESSION contains the MCP session context."
         (claude-code-ide-mcp--make-error-response
          id -32601 (format "Unknown tool: %s" tool-name))))))
 
+(defun claude-code-ide-mcp--derive-status (session)
+  "Derive session status from SESSION's stopped flag and pending-permissions count."
+  (if (or (claude-code-ide-session-stopped session)
+          (> (claude-code-ide-session-pending-permissions session) 0))
+      'idle
+    'working))
+
 (defvar claude-code-ide-dashboard-buffer-name)
 
 (defun claude-code-ide-mcp--handle-status-changed (params &optional session)
