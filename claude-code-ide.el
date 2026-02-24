@@ -123,10 +123,17 @@
 
 (defun claude-code-ide--next-session-number (dir)
   "Return the next available session number for DIR.
-Returns nil if no sessions exist yet, or the next number otherwise."
+Returns nil if no sessions exist yet, or the next number otherwise.
+Finds the maximum existing session number to avoid collisions after
+sessions are stopped."
   (let ((sessions (claude-code-ide--sessions-for-directory dir)))
     (when sessions
-      (1+ (length sessions)))))
+      (let ((max-num 0))
+        (dolist (s sessions)
+          (when-let ((name (claude-code-ide-session-name s)))
+            (when (string-match "\\`[0-9]+\\'" name)
+              (setq max-num (max max-num (string-to-number name))))))
+        (1+ (max max-num (length sessions)))))))
 
 (defun claude-code-ide--buffer-name-for-session (session)
   "Generate buffer name for SESSION."
@@ -731,6 +738,10 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
             (claude-code-ide-mcp-server-session-ended session-id)
             ;; Remove from sessions table
             (remhash session-id claude-code-ide--sessions)
+            ;; Remove post-command-hook trackers if no more sessions
+            (when (= 0 (hash-table-count claude-code-ide--sessions))
+              (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
+              (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer))
             ;; Remove reflow filter advice if no more sessions
             (when (and claude-code-ide-prevent-reflow-glitch
                        (= 0 (hash-table-count claude-code-ide--sessions)))

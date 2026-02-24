@@ -315,18 +315,22 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
     ;; No sessions yet -- should return nil
     (should (null (claude-code-ide--next-session-number "/tmp/proj/")))
-    ;; One session exists -- next should be 2
+    ;; One session exists (no name) -- next should be 2
     (puthash "s1" (make-claude-code-ide-session
                    :session-id "s1" :directory "/tmp/proj/")
              claude-code-ide--sessions)
     (should (= 2 (claude-code-ide--next-session-number "/tmp/proj/")))
-    ;; Two sessions exist -- next should be 3
+    ;; Two sessions exist, second named "2" -- next should be 3
     (puthash "s2" (make-claude-code-ide-session
-                   :session-id "s2" :directory "/tmp/proj/")
+                   :session-id "s2" :directory "/tmp/proj/" :name "2")
              claude-code-ide--sessions)
     (should (= 3 (claude-code-ide--next-session-number "/tmp/proj/")))
     ;; Different directory -- unaffected
-    (should (null (claude-code-ide--next-session-number "/tmp/other/")))))
+    (should (null (claude-code-ide--next-session-number "/tmp/other/")))
+    ;; Simulate stopping session s1 -- s2 with name "2" remains
+    ;; next should be 3, not 2 (avoid collision with existing name "2")
+    (remhash "s1" claude-code-ide--sessions)
+    (should (= 3 (claude-code-ide--next-session-number "/tmp/proj/")))))
 
 (ert-deftest claude-code-ide-test-resolve-session-from-session-buffer ()
   "Test that resolve-session returns session when current buffer is a session buffer."

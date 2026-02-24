@@ -905,10 +905,6 @@ Sets the port and server fields on the session struct.  Returns the port."
           (when (and claude-code-ide-mcp--buffer-project-cache
                      (string= claude-code-ide-mcp--buffer-project-cache project-dir))
             (claude-code-ide-mcp--invalidate-buffer-cache))))
-      ;; Remove hooks if no more sessions
-      (when (= 0 (hash-table-count claude-code-ide--sessions))
-        (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
-        (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer))
       (claude-code-ide-debug "MCP server stopped for %s"
                              (file-name-nondirectory (directory-file-name project-dir))))))
 
