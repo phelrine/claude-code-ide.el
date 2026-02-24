@@ -415,6 +415,29 @@ Optional SESSION contains the MCP session context."
 
 (defvar claude-code-ide-dashboard-buffer-name)
 
+(defun claude-code-ide-mcp--cancel-permission-timer (session)
+  "Cancel the permission debounce timer for SESSION."
+  (when-let ((timer (claude-code-ide-session-permission-timer session)))
+    (cancel-timer timer)
+    (setf (claude-code-ide-session-permission-timer session) nil)))
+
+(defun claude-code-ide-mcp--start-permission-timer (session)
+  "Start or restart the permission debounce timer for SESSION.
+When the timer fires, if `permission-request-count' is still > 0,
+set `permission-pending' to t and refresh the dashboard."
+  (claude-code-ide-mcp--cancel-permission-timer session)
+  (setf (claude-code-ide-session-permission-timer session)
+        (run-with-timer claude-code-ide-permission-debounce-seconds nil
+                        (lambda ()
+                          (setf (claude-code-ide-session-permission-timer session) nil)
+                          (when (> (claude-code-ide-session-permission-request-count session) 0)
+                            (setf (claude-code-ide-session-permission-pending session) t)
+                            ;; Refresh dashboard
+                            (when-let ((buf (get-buffer claude-code-ide-dashboard-buffer-name)))
+                              (when (get-buffer-window buf t)
+                                (with-current-buffer buf
+                                  (revert-buffer t t)))))))))
+
 (defun claude-code-ide-mcp--handle-status-changed (params &optional session)
   "Handle a session/statusChanged notification with PARAMS.
 PARAMS is an alist with status, message, and optional event fields.
@@ -433,15 +456,29 @@ looking up session_id from PARAMS for backward compatibility."
           (progn
             (pcase event
               ("Stop"
-               (setf (claude-code-ide-session-stopped resolved-session) t))
+               (setf (claude-code-ide-session-stopped resolved-session) t)
+               (setf (claude-code-ide-session-permission-request-count resolved-session) 0)
+               (setf (claude-code-ide-session-permission-pending resolved-session) nil)
+               (claude-code-ide-mcp--cancel-permission-timer resolved-session))
               ("UserPromptSubmit"
                (setf (claude-code-ide-session-stopped resolved-session) nil)
-               (setf (claude-code-ide-session-pending-permissions resolved-session) 0))
+               (setf (claude-code-ide-session-pending-permissions resolved-session) 0)
+               (setf (claude-code-ide-session-permission-request-count resolved-session) 0)
+               (setf (claude-code-ide-session-permission-pending resolved-session) nil)
+               (claude-code-ide-mcp--cancel-permission-timer resolved-session))
               ("PreToolUse"
-               (cl-incf (claude-code-ide-session-pending-permissions resolved-session)))
+               (cl-incf (claude-code-ide-session-pending-permissions resolved-session))
+               (cl-incf (claude-code-ide-session-permission-request-count resolved-session))
+               (claude-code-ide-mcp--start-permission-timer resolved-session))
               ("PostToolUse"
                (setf (claude-code-ide-session-pending-permissions resolved-session)
-                     (max 0 (1- (claude-code-ide-session-pending-permissions resolved-session)))))
+                     (max 0 (1- (claude-code-ide-session-pending-permissions resolved-session))))
+               (let ((count (max 0 (1- (claude-code-ide-session-permission-request-count
+                                        resolved-session)))))
+                 (setf (claude-code-ide-session-permission-request-count resolved-session) count)
+                 (when (= count 0)
+                   (claude-code-ide-mcp--cancel-permission-timer resolved-session)
+                   (setf (claude-code-ide-session-permission-pending resolved-session) nil))))
               (_ (claude-code-ide-debug "Unknown status event: %s" event)))
             (setf (claude-code-ide-session-status resolved-session)
                   (claude-code-ide-mcp--derive-status resolved-session)))

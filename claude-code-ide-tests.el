@@ -2696,6 +2696,82 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (eq (claude-code-ide-session-status session) 'idle))
     (should (equal (claude-code-ide-session-last-message session) "test"))))
 
+(ert-deftest claude-code-ide-test-permission-debounce-auto-approved ()
+  "Test that quick PreToolUse->PostToolUse does not set permission-pending."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1" :directory "/tmp/proj/" :stopped nil)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; PreToolUse starts timer
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PreToolUse") (message . "Read")) session)
+    (should (= (claude-code-ide-session-permission-request-count session) 1))
+    (should (claude-code-ide-session-permission-timer session))
+    ;; PostToolUse cancels timer
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "Read")) session)
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-timer session)))
+    (should (null (claude-code-ide-session-permission-pending session)))))
+
+(ert-deftest claude-code-ide-test-permission-debounce-timer-fires ()
+  "Test that permission-pending is set when timer fires with pending count > 0."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (claude-code-ide-permission-debounce-seconds 0.1)
+        (session (make-claude-code-ide-session
+                  :session-id "s1" :directory "/tmp/proj/" :stopped nil)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; PreToolUse starts timer
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PreToolUse") (message . "Edit")) session)
+    (should (null (claude-code-ide-session-permission-pending session)))
+    ;; Wait for timer to fire
+    (sleep-for 0.2)
+    (should (eq (claude-code-ide-session-permission-pending session) t))
+    ;; Cleanup timer
+    (claude-code-ide-mcp--cancel-permission-timer session)))
+
+(ert-deftest claude-code-ide-test-permission-stop-clears-all ()
+  "Test that Stop clears permission-request-count, permission-pending, and timer."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1" :directory "/tmp/proj/" :stopped nil
+                  :permission-request-count 2 :permission-pending t)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Start a timer so we can verify it gets cancelled
+    (claude-code-ide-mcp--start-permission-timer session)
+    (should (claude-code-ide-session-permission-timer session))
+    ;; Stop clears everything
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "Stop") (message . "Done")) session)
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-pending session)))
+    (should (null (claude-code-ide-session-permission-timer session)))))
+
+(ert-deftest claude-code-ide-test-permission-multi-agent-debounce ()
+  "Test debounce with multiple concurrent PreToolUse events."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1" :directory "/tmp/proj/" :stopped nil)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Two PreToolUse events
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PreToolUse") (message . "A: Edit")) session)
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PreToolUse") (message . "B: Write")) session)
+    (should (= (claude-code-ide-session-permission-request-count session) 2))
+    ;; One PostToolUse -- count drops to 1, timer NOT cancelled
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "A done")) session)
+    (should (= (claude-code-ide-session-permission-request-count session) 1))
+    (should (claude-code-ide-session-permission-timer session))
+    ;; Second PostToolUse -- count drops to 0, timer cancelled
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "B done")) session)
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-timer session)))
+    (should (null (claude-code-ide-session-permission-pending session)))))
+
 (ert-deftest claude-code-ide-test-handle-status-changed ()
   "Test handling session/statusChanged notification with direct session."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
