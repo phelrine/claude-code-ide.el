@@ -97,6 +97,24 @@
   :group 'tools
   :prefix "claude-code-ide-")
 
+;;; Faces
+
+(defface claude-code-ide-status-idle
+  '((t :foreground "gray50"))
+  "Face for idle status indicator."
+  :group 'claude-code-ide)
+
+(defface claude-code-ide-status-working
+  '((t :foreground "green3"))
+  "Face for working status indicator."
+  :group 'claude-code-ide)
+
+(defface claude-code-ide-status-waiting
+  '((((class color) (background dark)) :foreground "gold")
+    (t :foreground "DarkOrange"))
+  "Face for waiting status indicator."
+  :group 'claude-code-ide)
+
 ;;; Session Lookup Helpers
 
 (defun claude-code-ide--sessions-for-directory (dir)
@@ -165,6 +183,114 @@ Return nil if no sessions exist."
                          sessions))
                 (choice (completing-read "Session: " candidates nil t)))
            (cdr (assoc choice candidates))))))))
+
+;;; Status Display
+
+(defvar claude-code-ide--status-blink-on t
+  "Whether the working status indicator is currently visible.")
+
+(defvar claude-code-ide--status-blink-timer nil
+  "Timer for blinking the working status indicator.")
+
+(defun claude-code-ide--status-face (status)
+  "Return the face for STATUS symbol."
+  (pcase status
+    ('working 'claude-code-ide-status-working)
+    ((or 'waiting-permission 'waiting-input 'waiting-elicitation)
+     'claude-code-ide-status-waiting)
+    (_ 'claude-code-ide-status-idle)))
+
+(defun claude-code-ide--status-indicator (status)
+  "Return a propertized indicator string for STATUS."
+  (let ((face (claude-code-ide--status-face status))
+        (dot (if (and (eq status 'working)
+                      (not claude-code-ide--status-blink-on))
+                 " "
+               "●")))
+    (propertize dot 'face face)))
+
+(defun claude-code-ide--status-priority (status)
+  "Return numeric priority for STATUS (higher = more urgent)."
+  (pcase status
+    ((or 'waiting-permission 'waiting-input 'waiting-elicitation) 3)
+    ('working 2)
+    (_ 1)))
+
+(defun claude-code-ide--highest-priority-session ()
+  "Return the session with the highest priority status, or nil."
+  (let ((best nil)
+        (best-priority 0))
+    (maphash (lambda (_id session)
+               (let ((p (claude-code-ide--status-priority
+                         (claude-code-ide-session-status session))))
+                 (when (> p best-priority)
+                   (setq best session best-priority p))))
+             claude-code-ide--sessions)
+    best))
+
+(defvar claude-code-ide-dashboard-buffer-name)
+
+(defun claude-code-ide--status-blink-toggle ()
+  "Toggle the blink state and update displays."
+  (setq claude-code-ide--status-blink-on
+        (not claude-code-ide--status-blink-on))
+  (force-mode-line-update t)
+  (when-let ((buf (get-buffer claude-code-ide-dashboard-buffer-name)))
+    (when (get-buffer-window buf t)
+      (with-current-buffer buf
+        (revert-buffer t t)))))
+
+(defun claude-code-ide--status-ensure-blink-timer ()
+  "Start or stop the blink timer based on whether any session is working."
+  (let ((any-working nil))
+    (maphash (lambda (_id session)
+               (when (eq (claude-code-ide-session-status session) 'working)
+                 (setq any-working t)))
+             claude-code-ide--sessions)
+    (if any-working
+        (unless claude-code-ide--status-blink-timer
+          (setq claude-code-ide--status-blink-on t)
+          (setq claude-code-ide--status-blink-timer
+                (run-with-timer 0.5 0.5 #'claude-code-ide--status-blink-toggle)))
+      (when claude-code-ide--status-blink-timer
+        (cancel-timer claude-code-ide--status-blink-timer)
+        (setq claude-code-ide--status-blink-timer nil)
+        (setq claude-code-ide--status-blink-on t)))))
+
+(defun claude-code-ide--status-on-change ()
+  "Handle status change: update blink timer and mode line."
+  (claude-code-ide--status-ensure-blink-timer)
+  (force-mode-line-update t))
+
+(add-hook 'claude-code-ide-status-changed-hook #'claude-code-ide--status-on-change)
+
+;;; Mode Line
+
+(defvar claude-code-ide--mode-line-format
+  '(:eval (claude-code-ide--mode-line-string))
+  "Mode line construct for Claude Code status.")
+
+(put 'claude-code-ide--mode-line-format 'risky-local-variable t)
+
+(defun claude-code-ide--mode-line-string ()
+  "Return the mode line string for Claude Code status."
+  (when (> (hash-table-count claude-code-ide--sessions) 0)
+    (when-let ((session (claude-code-ide--highest-priority-session)))
+      (let* ((status (claude-code-ide-session-status session))
+             (indicator (claude-code-ide--status-indicator status)))
+        (concat " " indicator " Claude")))))
+
+(defun claude-code-ide--setup-mode-line ()
+  "Add Claude Code status to the global mode line."
+  (unless global-mode-string
+    (setq global-mode-string '("")))
+  (unless (memq 'claude-code-ide--mode-line-format global-mode-string)
+    (setq global-mode-string
+          (append global-mode-string '(claude-code-ide--mode-line-format)))))
+
+(claude-code-ide--setup-mode-line)
+
+;;; Customization Variables
 
 (defcustom claude-code-ide-cli-path "claude"
   "Path to the Claude Code CLI executable."
@@ -758,6 +884,9 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
                 (let ((kill-buffer-hook nil)
                       (kill-buffer-query-functions nil))
                   (kill-buffer buf))))
+            ;; Update status display
+            (claude-code-ide--status-ensure-blink-timer)
+            (force-mode-line-update t)
             (claude-code-ide-debug "Cleaned up Claude Code session for %s"
                                    (file-name-nondirectory (directory-file-name dir)))))
       (setq claude-code-ide--cleanup-in-progress nil))))

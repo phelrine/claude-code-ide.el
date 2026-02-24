@@ -432,6 +432,8 @@ looking up session_id from PARAMS."
       (when message
         (setf (claude-code-ide-session-last-message resolved-session) message))
       (setf (claude-code-ide-session-status-updated-at resolved-session) (float-time))
+      ;; Notify status display (mode line, blink timer, dashboard)
+      (run-hooks 'claude-code-ide-status-changed-hook)
       ;; Refresh dashboard if visible
       (when-let ((buf (get-buffer claude-code-ide-dashboard-buffer-name)))
         (when (get-buffer-window buf t)

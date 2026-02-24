@@ -43,6 +43,10 @@ and the directory-keyed process/session-id hash tables."
   "Hash table mapping session-id to `claude-code-ide-session' structs.
 This is the single source of truth for all active sessions.")
 
+(defvar claude-code-ide-status-changed-hook nil
+  "Hook run after a session's status changes.
+Called after the session struct has been updated.")
+
 (provide 'claude-code-ide-session)
 
 ;;; claude-code-ide-session.el ends here

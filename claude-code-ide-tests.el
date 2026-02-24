@@ -2697,11 +2697,11 @@ have completed before cleanup.  Waits up to 5 seconds."
           (should (stringp (aref cols 1)))  ; directory
           (should (stringp (aref cols 2)))  ; status
           (should (stringp (aref cols 3)))  ; last-message
-          ;; Verify status formatting
-          (should (equal "idle" (aref cols 2))))
+          ;; Verify status formatting - now includes colored indicator
+          (should (string-match-p "● idle" (aref cols 2))))
         (let* ((entry (cadr entries))
                (cols (cadr entry)))
-          (should (equal "working" (aref cols 2))))))))
+          (should (string-match-p "● working" (aref cols 2))))))))
 
 (ert-deftest claude-code-ide-test-dashboard-entries-empty ()
   "Test that dashboard returns empty list with no sessions."
@@ -2872,12 +2872,19 @@ have completed before cleanup.  Waits up to 5 seconds."
 
 (ert-deftest claude-code-ide-test-dashboard-format-status ()
   "Test status formatting for dashboard display."
-  (should (equal "working" (claude-code-ide-dashboard--format-status 'working)))
-  (should (equal "idle" (claude-code-ide-dashboard--format-status 'idle)))
-  (should (equal "idle" (claude-code-ide-dashboard--format-status nil)))
-  (should (equal "waiting-permission" (claude-code-ide-dashboard--format-status 'waiting-permission)))
-  (should (equal "waiting-input" (claude-code-ide-dashboard--format-status 'waiting-input)))
-  (should (equal "waiting-elicitation" (claude-code-ide-dashboard--format-status 'waiting-elicitation))))
+  (should (string-match-p "● working" (claude-code-ide-dashboard--format-status 'working)))
+  (should (string-match-p "● idle" (claude-code-ide-dashboard--format-status 'idle)))
+  (should (string-match-p "● idle" (claude-code-ide-dashboard--format-status nil)))
+  (should (string-match-p "● waiting-permission" (claude-code-ide-dashboard--format-status 'waiting-permission)))
+  (should (string-match-p "● waiting-input" (claude-code-ide-dashboard--format-status 'waiting-input)))
+  (should (string-match-p "● waiting-elicitation" (claude-code-ide-dashboard--format-status 'waiting-elicitation)))
+  ;; Verify faces
+  (let ((idle-str (claude-code-ide-dashboard--format-status 'idle)))
+    (should (eq 'claude-code-ide-status-idle (get-text-property 0 'face idle-str))))
+  (let ((working-str (claude-code-ide-dashboard--format-status 'working)))
+    (should (eq 'claude-code-ide-status-working (get-text-property 0 'face working-str))))
+  (let ((waiting-str (claude-code-ide-dashboard--format-status 'waiting-permission)))
+    (should (eq 'claude-code-ide-status-waiting (get-text-property 0 'face waiting-str)))))
 
 (ert-deftest claude-code-ide-test-dashboard-truncate-message ()
   "Test message truncation for dashboard display."
@@ -2892,6 +2899,69 @@ have completed before cleanup.  Waits up to 5 seconds."
     (let ((result (claude-code-ide-dashboard--truncate-message "this is a very long message indeed")))
       (should (= 20 (length result)))
       (should (string-suffix-p "…" result)))))
+
+(ert-deftest claude-code-ide-test-status-priority ()
+  "Test status priority ordering."
+  (should (< (claude-code-ide--status-priority 'idle)
+             (claude-code-ide--status-priority 'working)))
+  (should (< (claude-code-ide--status-priority 'working)
+             (claude-code-ide--status-priority 'waiting-permission)))
+  (should (= (claude-code-ide--status-priority 'waiting-permission)
+             (claude-code-ide--status-priority 'waiting-input)))
+  (should (= (claude-code-ide--status-priority 'waiting-input)
+             (claude-code-ide--status-priority 'waiting-elicitation))))
+
+(ert-deftest claude-code-ide-test-highest-priority-session ()
+  "Test that highest priority session is selected correctly."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    ;; No sessions
+    (should-not (claude-code-ide--highest-priority-session))
+    ;; Single idle session
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1" :status 'idle :directory "/tmp/a/")
+             claude-code-ide--sessions)
+    (should (eq 'idle (claude-code-ide-session-status
+                       (claude-code-ide--highest-priority-session))))
+    ;; Add working session - should take priority
+    (puthash "s2" (make-claude-code-ide-session
+                   :session-id "s2" :status 'working :directory "/tmp/b/")
+             claude-code-ide--sessions)
+    (should (eq 'working (claude-code-ide-session-status
+                          (claude-code-ide--highest-priority-session))))
+    ;; Add waiting session - should take priority over working
+    (puthash "s3" (make-claude-code-ide-session
+                   :session-id "s3" :status 'waiting-permission :directory "/tmp/c/")
+             claude-code-ide--sessions)
+    (should (eq 'waiting-permission (claude-code-ide-session-status
+                                     (claude-code-ide--highest-priority-session))))))
+
+(ert-deftest claude-code-ide-test-mode-line-string ()
+  "Test mode line string generation."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (claude-code-ide--status-blink-on t))
+    ;; No sessions - returns nil
+    (should-not (claude-code-ide--mode-line-string))
+    ;; With session
+    (puthash "s1" (make-claude-code-ide-session
+                   :session-id "s1" :status 'idle :directory "/tmp/a/")
+             claude-code-ide--sessions)
+    (let ((result (claude-code-ide--mode-line-string)))
+      (should (stringp result))
+      (should (string-match-p "● Claude" result)))))
+
+(ert-deftest claude-code-ide-test-status-blink ()
+  "Test that blink toggles indicator for working status."
+  (let ((claude-code-ide--status-blink-on nil))
+    ;; When blink is off, working shows space
+    (let ((indicator (claude-code-ide--status-indicator 'working)))
+      (should (equal " " (substring-no-properties indicator))))
+    ;; Non-working statuses always show dot
+    (let ((indicator (claude-code-ide--status-indicator 'idle)))
+      (should (equal "●" (substring-no-properties indicator)))))
+  (let ((claude-code-ide--status-blink-on t))
+    ;; When blink is on, working shows dot
+    (let ((indicator (claude-code-ide--status-indicator 'working)))
+      (should (equal "●" (substring-no-properties indicator))))))
 
 ;;; Integration Tests
 

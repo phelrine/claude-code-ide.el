@@ -21,8 +21,9 @@
   "Maximum length for the last activity message in the dashboard.")
 
 (defun claude-code-ide-dashboard--format-status (status)
-  "Format STATUS symbol for display."
-  (symbol-name (or status 'idle)))
+  "Format STATUS symbol for display with colored indicator."
+  (let ((s (or status 'idle)))
+    (concat (claude-code-ide--status-indicator s) " " (symbol-name s))))
 
 (defun claude-code-ide-dashboard--truncate-message (msg)
   "Truncate MSG to a single line within `claude-code-ide-dashboard-message-max-length'."
