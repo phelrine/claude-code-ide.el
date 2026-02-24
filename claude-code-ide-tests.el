@@ -2848,7 +2848,7 @@ have completed before cleanup.  Waits up to 5 seconds."
           (should (stringp (aref cols 0)))  ; name
           (should (stringp (aref cols 1)))  ; directory
           (should (stringp (aref cols 2)))  ; status
-          (should (stringp (aref cols 3)))  ; last-message
+          (should (stringp (aref cols 6)))  ; last-message
           ;; Verify status formatting
           (should (equal "idle" (aref cols 2))))
         (let* ((entry (cadr entries))
@@ -2880,7 +2880,7 @@ have completed before cleanup.  Waits up to 5 seconds."
         ;; Name falls back to session-id
         (should (equal "s1" (aref cols 0)))
         ;; Last-message falls back to empty string
-        (should (equal "" (aref cols 3)))))))
+        (should (equal "" (aref cols 6)))))))
 
 ;;; Session Lookup Helper Tests
 
