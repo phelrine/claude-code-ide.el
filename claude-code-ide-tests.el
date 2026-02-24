@@ -256,6 +256,15 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (eq (claude-code-ide-session-stopped session) t))
     (should (= (claude-code-ide-session-pending-permissions session) 0))))
 
+(ert-deftest claude-code-ide-test-session-permission-fields ()
+  "Test that session struct has permission tracking fields."
+  (let ((session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/")))
+    (should (eq (claude-code-ide-session-permission-pending session) nil))
+    (should (= (claude-code-ide-session-permission-request-count session) 0))
+    (should (null (claude-code-ide-session-permission-timer session)))))
+
 (ert-deftest claude-code-ide-test-derive-status ()
   "Test derive-status returns correct status for all field combinations."
   ;; Default session (stopped=t, pending=0) -> idle (fresh sessions are stopped)
