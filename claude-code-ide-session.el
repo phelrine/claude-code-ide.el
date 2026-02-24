@@ -34,14 +34,9 @@ and the directory-keyed process/session-id hash tables."
   deferred          ; hash-table of deferred responses
   active-diffs      ; hash-table of active ediff sessions
   ;; Status tracking
-  (status 'idle)      ; symbol: idle or working
+  (status 'idle)      ; symbol: idle, working, waiting-permission, waiting-input, waiting-elicitation
   last-message        ; string: last assistant message or tool name
   status-updated-at   ; float-time: timestamp of last status update
-  (stopped t)         ; boolean: whether the agent has stopped
-  (pending-permissions 0) ; integer: number of pending permission requests
-  (permission-pending nil)  ; boolean: debounced permission-waiting flag
-  (permission-request-count 0) ; integer: unmatched PreToolUse count
-  permission-timer          ; timer: debounce timer for permission detection
   original-tab)     ; tab-bar tab where session was started
 
 (defvar claude-code-ide--sessions (make-hash-table :test 'equal)

@@ -80,13 +80,6 @@
 (defconst claude-code-ide-mcp-initial-notification-delay 0.1
   "Delay in seconds before sending initial notifications after connection.")
 
-(defcustom claude-code-ide-permission-debounce-seconds 2
-  "Seconds to wait before marking a session as permission-pending.
-When a PreToolUse event arrives, a timer is started.  If no PostToolUse
-follows within this many seconds, `permission-pending' is set to t."
-  :type 'number
-  :group 'claude-code-ide)
-
 ;;; Variables
 
 ;; Buffer-local cache variables for performance optimization
@@ -406,86 +399,36 @@ Optional SESSION contains the MCP session context."
         (claude-code-ide-mcp--make-error-response
          id -32601 (format "Unknown tool: %s" tool-name))))))
 
-(defun claude-code-ide-mcp--derive-status (session)
-  "Derive session status from SESSION's stopped flag and pending-permissions count."
-  (if (or (claude-code-ide-session-stopped session)
-          (> (claude-code-ide-session-pending-permissions session) 0))
-      'idle
-    'working))
-
 (defvar claude-code-ide-dashboard-buffer-name)
-
-(defun claude-code-ide-mcp--cancel-permission-timer (session)
-  "Cancel the permission debounce timer for SESSION."
-  (when-let ((timer (claude-code-ide-session-permission-timer session)))
-    (cancel-timer timer)
-    (setf (claude-code-ide-session-permission-timer session) nil)))
-
-(defun claude-code-ide-mcp--start-permission-timer (session)
-  "Start or restart the permission debounce timer for SESSION.
-When the timer fires, if `permission-request-count' is still > 0,
-set `permission-pending' to t and refresh the dashboard."
-  (claude-code-ide-mcp--cancel-permission-timer session)
-  (setf (claude-code-ide-session-permission-timer session)
-        (run-with-timer claude-code-ide-permission-debounce-seconds nil
-                        (lambda ()
-                          (setf (claude-code-ide-session-permission-timer session) nil)
-                          (when (> (claude-code-ide-session-permission-request-count session) 0)
-                            (setf (claude-code-ide-session-permission-pending session) t)
-                            ;; Refresh dashboard
-                            (when-let ((buf (get-buffer claude-code-ide-dashboard-buffer-name)))
-                              (when (get-buffer-window buf t)
-                                (with-current-buffer buf
-                                  (revert-buffer t t)))))))))
 
 (defun claude-code-ide-mcp--handle-status-changed (params &optional session)
   "Handle a session/statusChanged notification with PARAMS.
-PARAMS is an alist with status, message, and optional event fields.
-When EVENT is present, update stopped/pending-permissions fields and
-derive status; otherwise fall back to direct status assignment.
+PARAMS is an alist with event, optional notification_type, and message.
 Optional SESSION is the resolved session; when nil, falls back to
-looking up session_id from PARAMS for backward compatibility."
+looking up session_id from PARAMS."
   (when-let* ((resolved-session
                (or session
                    (when-let ((session-id (alist-get 'session_id params)))
                      (gethash session-id claude-code-ide--sessions)))))
     (let ((event (alist-get 'event params))
           (message (alist-get 'message params)))
-      (if event
-          ;; Event-based logic
-          (progn
-            (pcase event
-              ("Stop"
-               (setf (claude-code-ide-session-stopped resolved-session) t)
-               (setf (claude-code-ide-session-pending-permissions resolved-session) 0)
-               (setf (claude-code-ide-session-permission-request-count resolved-session) 0)
-               (setf (claude-code-ide-session-permission-pending resolved-session) nil)
-               (claude-code-ide-mcp--cancel-permission-timer resolved-session))
-              ("UserPromptSubmit"
-               (setf (claude-code-ide-session-stopped resolved-session) nil)
-               (setf (claude-code-ide-session-pending-permissions resolved-session) 0)
-               (setf (claude-code-ide-session-permission-request-count resolved-session) 0)
-               (setf (claude-code-ide-session-permission-pending resolved-session) nil)
-               (claude-code-ide-mcp--cancel-permission-timer resolved-session))
-              ("PreToolUse"
-               (cl-incf (claude-code-ide-session-pending-permissions resolved-session))
-               (cl-incf (claude-code-ide-session-permission-request-count resolved-session))
-               (claude-code-ide-mcp--start-permission-timer resolved-session))
-              ("PostToolUse"
-               (setf (claude-code-ide-session-pending-permissions resolved-session)
-                     (max 0 (1- (claude-code-ide-session-pending-permissions resolved-session))))
-               (let ((count (max 0 (1- (claude-code-ide-session-permission-request-count
-                                        resolved-session)))))
-                 (setf (claude-code-ide-session-permission-request-count resolved-session) count)
-                 (when (= count 0)
-                   (claude-code-ide-mcp--cancel-permission-timer resolved-session)
-                   (setf (claude-code-ide-session-permission-pending resolved-session) nil))))
-              (_ (claude-code-ide-debug "Unknown status event: %s" event)))
-            (setf (claude-code-ide-session-status resolved-session)
-                  (claude-code-ide-mcp--derive-status resolved-session)))
-        ;; Backward compat: direct status assignment
-        (setf (claude-code-ide-session-status resolved-session)
-              (intern (alist-get 'status params "working"))))
+      (when event
+        (pcase event
+          ("Stop"
+           (setf (claude-code-ide-session-status resolved-session) 'idle))
+          ("UserPromptSubmit"
+           (setf (claude-code-ide-session-status resolved-session) 'working))
+          ("PreToolUse"
+           (setf (claude-code-ide-session-status resolved-session) 'working))
+          ("Notification"
+           (pcase (alist-get 'notification_type params)
+             ("permission_prompt"
+              (setf (claude-code-ide-session-status resolved-session) 'waiting-permission))
+             ("idle_prompt"
+              (setf (claude-code-ide-session-status resolved-session) 'waiting-input))
+             ("elicitation_dialog"
+              (setf (claude-code-ide-session-status resolved-session) 'waiting-elicitation))))
+          (_ (claude-code-ide-debug "Unknown status event: %s" event))))
       (when message
         (setf (claude-code-ide-session-last-message resolved-session) message))
       (setf (claude-code-ide-session-status-updated-at resolved-session) (float-time))
@@ -951,7 +894,6 @@ Sets the port and server fields on the session struct.  Returns the port."
         (cancel-timer ping-timer))
       (when-let ((sel-timer (claude-code-ide-session-selection-timer session)))
         (cancel-timer sel-timer))
-      (claude-code-ide-mcp--cancel-permission-timer session)
       ;; Remove lockfile
       (when-let ((port (claude-code-ide-session-port session)))
         (claude-code-ide-debug "Removing lockfile for port %d" port)

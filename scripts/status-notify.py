@@ -110,23 +110,24 @@ def main():
     if not event:
         return
 
-    # Map event to status
-    if event in ("Stop", "PreToolUse"):
-        status = "idle"
-    else:
-        status = "working"
+    # Build params with event
+    params = {"event": event}
 
-    # Map event to message
+    # Forward notification_type for Notification events
+    if event == "Notification":
+        ntype = hook_data.get("notification_type", "")
+        if ntype:
+            params["notification_type"] = ntype
+
+    # Extract message
     message = None
     if event == "Stop":
         message = hook_data.get("last_assistant_message")
-    elif event == "PreToolUse":
-        message = hook_data.get("tool_name")
-    elif event == "PostToolUse":
+    elif event == "Notification":
+        message = hook_data.get("message")
+    elif event in ("PreToolUse", "PostToolUse"):
         message = hook_data.get("tool_name")
 
-    # Build JSON-RPC notification
-    params = {"status": status, "event": event}
     if message is not None:
         params["message"] = message
 

@@ -44,13 +44,9 @@
                     (claude-code-ide-session-directory session)))
               (status (claude-code-ide-dashboard--format-status
                        (claude-code-ide-session-status session)))
-              (stopped (if (claude-code-ide-session-stopped session) "t" "nil"))
-              (perm (if (claude-code-ide-session-permission-pending session) "t" "nil"))
-              (count (number-to-string
-                      (claude-code-ide-session-permission-request-count session)))
               (msg (claude-code-ide-dashboard--truncate-message
                     (claude-code-ide-session-last-message session))))
-         (push (list id (vector name dir status stopped perm count msg)) entries)))
+         (push (list id (vector name dir status msg)) entries)))
      claude-code-ide--sessions)
     (nreverse entries)))
 
@@ -105,10 +101,7 @@
   "Major mode for viewing Claude Code sessions."
   (setq tabulated-list-format [("Name" 15 t)
                                ("Directory" 30 t)
-                               ("Status" 10 t)
-                               ("Stopped" 8 t)
-                               ("Perm" 5 t)
-                               ("Count" 6 t)
+                               ("Status" 20 t)
                                ("Last Activity" 0 t)])
   (setq tabulated-list-entries #'claude-code-ide-dashboard--entries)
   (setq tabulated-list-padding 2)

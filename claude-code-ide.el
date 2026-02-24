@@ -772,7 +772,7 @@ symlink), it falls back to the corresponding .el symlink first."
 (defconst claude-code-ide--status-hook-command "python3 ~/.claude/hooks/status-notify.py"
   "Hook command for status notifications.")
 
-(defconst claude-code-ide--status-hook-events '("Stop" "PreToolUse" "PostToolUse" "UserPromptSubmit")
+(defconst claude-code-ide--status-hook-events '("Stop" "PreToolUse" "Notification" "UserPromptSubmit")
   "Hook events that trigger status notifications.")
 
 ;;;###autoload
