@@ -2950,18 +2950,21 @@ have completed before cleanup.  Waits up to 5 seconds."
       (should (string-match-p "● Claude" result)))))
 
 (ert-deftest claude-code-ide-test-status-blink ()
-  "Test that blink toggles indicator for working status."
+  "Test that blink dims indicator for working status instead of hiding."
   (let ((claude-code-ide--status-blink-on nil))
-    ;; When blink is off, working shows space
+    ;; When blink is off, working shows dot with idle (dim) face
     (let ((indicator (claude-code-ide--status-indicator 'working)))
-      (should (equal " " (substring-no-properties indicator))))
-    ;; Non-working statuses always show dot
+      (should (equal "●" (substring-no-properties indicator)))
+      (should (eq 'claude-code-ide-status-idle (get-text-property 0 'face indicator))))
+    ;; Non-working statuses always show dot with their own face
     (let ((indicator (claude-code-ide--status-indicator 'idle)))
-      (should (equal "●" (substring-no-properties indicator)))))
+      (should (equal "●" (substring-no-properties indicator)))
+      (should (eq 'claude-code-ide-status-idle (get-text-property 0 'face indicator)))))
   (let ((claude-code-ide--status-blink-on t))
-    ;; When blink is on, working shows dot
+    ;; When blink is on, working shows dot with working face
     (let ((indicator (claude-code-ide--status-indicator 'working)))
-      (should (equal "●" (substring-no-properties indicator))))))
+      (should (equal "●" (substring-no-properties indicator)))
+      (should (eq 'claude-code-ide-status-working (get-text-property 0 'face indicator))))))
 
 ;;; Integration Tests
 

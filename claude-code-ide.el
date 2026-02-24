@@ -202,12 +202,11 @@ Return nil if no sessions exist."
 
 (defun claude-code-ide--status-indicator (status)
   "Return a propertized indicator string for STATUS."
-  (let ((face (claude-code-ide--status-face status))
-        (dot (if (and (eq status 'working)
-                      (not claude-code-ide--status-blink-on))
-                 " "
-               "●")))
-    (propertize dot 'face face)))
+  (let ((face (if (and (eq status 'working)
+                       (not claude-code-ide--status-blink-on))
+                  'claude-code-ide-status-idle
+                (claude-code-ide--status-face status))))
+    (propertize "●" 'face face)))
 
 (defun claude-code-ide--status-priority (status)
   "Return numeric priority for STATUS (higher = more urgent)."
