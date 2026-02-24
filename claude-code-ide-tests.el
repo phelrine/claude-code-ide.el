@@ -253,14 +253,19 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((session (make-claude-code-ide-session
                   :session-id "s1"
                   :directory "/tmp/proj/")))
-    (should (eq (claude-code-ide-session-stopped session) nil))
+    (should (eq (claude-code-ide-session-stopped session) t))
     (should (= (claude-code-ide-session-pending-permissions session) 0))))
 
 (ert-deftest claude-code-ide-test-derive-status ()
   "Test derive-status returns correct status for all field combinations."
-  ;; Default session (stopped=nil, pending=0) -> working
+  ;; Default session (stopped=t, pending=0) -> idle (fresh sessions are stopped)
   (let ((session (make-claude-code-ide-session
                   :session-id "s1" :directory "/tmp/proj/")))
+    (should (eq (claude-code-ide-mcp--derive-status session) 'idle)))
+  ;; Not stopped, no pending (stopped=nil, pending=0) -> working
+  (let ((session (make-claude-code-ide-session
+                  :session-id "s0" :directory "/tmp/proj/"
+                  :stopped nil)))
     (should (eq (claude-code-ide-mcp--derive-status session) 'working)))
   ;; Stopped only (stopped=t, pending=0) -> idle
   (let ((session (make-claude-code-ide-session
@@ -2615,7 +2620,8 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
         (session (make-claude-code-ide-session
                   :session-id "s1"
-                  :directory "/tmp/proj/")))
+                  :directory "/tmp/proj/"
+                  :stopped nil)))
     (puthash "s1" session claude-code-ide--sessions)
     ;; Two agents both request permission (PreToolUse x2)
     (claude-code-ide-mcp--handle-status-changed
@@ -2658,7 +2664,8 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
         (session (make-claude-code-ide-session
                   :session-id "s1"
-                  :directory "/tmp/proj/")))
+                  :directory "/tmp/proj/"
+                  :stopped nil)))
     (puthash "s1" session claude-code-ide--sessions)
     ;; pending-permissions starts at 0; PostToolUse should not make it negative
     (claude-code-ide-mcp--handle-status-changed

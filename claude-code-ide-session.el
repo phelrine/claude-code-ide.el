@@ -37,7 +37,7 @@ and the directory-keyed process/session-id hash tables."
   (status 'idle)      ; symbol: idle or working
   last-message        ; string: last assistant message or tool name
   status-updated-at   ; float-time: timestamp of last status update
-  (stopped nil)       ; boolean: whether the agent has stopped
+  (stopped t)         ; boolean: whether the agent has stopped
   (pending-permissions 0) ; integer: number of pending permission requests
   original-tab)     ; tab-bar tab where session was started
 

@@ -434,7 +434,8 @@ looking up session_id from PARAMS for backward compatibility."
                (cl-incf (claude-code-ide-session-pending-permissions resolved-session)))
               ("PostToolUse"
                (setf (claude-code-ide-session-pending-permissions resolved-session)
-                     (max 0 (1- (claude-code-ide-session-pending-permissions resolved-session))))))
+                     (max 0 (1- (claude-code-ide-session-pending-permissions resolved-session)))))
+              (_ (claude-code-ide-debug "Unknown status event: %s" event)))
             (setf (claude-code-ide-session-status resolved-session)
                   (claude-code-ide-mcp--derive-status resolved-session)))
         ;; Backward compat: direct status assignment
