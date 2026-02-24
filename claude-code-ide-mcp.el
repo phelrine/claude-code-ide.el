@@ -213,10 +213,13 @@ This is a convenience function that combines
               (message . ,message)
               ,@(when data `((data . ,data)))))))
 
-(defun claude-code-ide-mcp--send-notification (method params)
-  "Send a JSON-RPC notification with METHOD and PARAMS to the current session."
-  ;; Try to use cached session first
-  (when-let* ((session (or (when (and claude-code-ide-mcp--buffer-cache-valid
+(defun claude-code-ide-mcp--send-notification (method params &optional session)
+  "Send a JSON-RPC notification with METHOD and PARAMS.
+If SESSION is provided, send to that session.
+Otherwise, look up the session for the current buffer."
+  ;; Use provided session or look up from buffer context
+  (when-let* ((session (or session
+                           (when (and claude-code-ide-mcp--buffer-cache-valid
                                       claude-code-ide-mcp--buffer-session-cache)
                              claude-code-ide-mcp--buffer-session-cache)
                            (when-let* ((project-dir (claude-code-ide-mcp--get-buffer-project))
@@ -864,8 +867,8 @@ Sets the port and server fields on the session struct.  Returns the port."
         (dolist (id session-ids)
           (claude-code-ide-mcp-stop-session id))))))
 
-(defun claude-code-ide-mcp-send-at-mentioned ()
-  "Send at-mentioned notification.
+(defun claude-code-ide-mcp-send-at-mentioned (&optional session)
+  "Send at-mentioned notification to SESSION.
 If a region is selected, send the selected lines.
 Otherwise, send the current line."
   (let* ((file-path (or (buffer-file-name) ""))
@@ -879,7 +882,8 @@ Otherwise, send the current line."
      "at_mentioned"
      `((filePath . ,file-path)
        (lineStart . ,start-line)
-       (lineEnd . ,end-line)))))
+       (lineEnd . ,end-line))
+     session)))
 
 (defun claude-code-ide-mcp-complete-deferred (session tool-name result &optional unique-key)
   "Complete a deferred response for SESSION and TOOL-NAME with RESULT.

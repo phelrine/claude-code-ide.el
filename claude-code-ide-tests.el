@@ -299,6 +299,148 @@ have completed before cleanup.  Waits up to 5 seconds."
     ;; Different directory -- unaffected
     (should (null (claude-code-ide--next-session-number "/tmp/other/")))))
 
+(ert-deftest claude-code-ide-test-resolve-session-from-session-buffer ()
+  "Test that resolve-session returns session when current buffer is a session buffer."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (with-temp-buffer
+      (let* ((buf (current-buffer))
+             (session (make-claude-code-ide-session
+                       :session-id "s1" :directory "/tmp/proj/" :buffer buf)))
+        (puthash "s1" session claude-code-ide--sessions)
+        (should (eq (claude-code-ide--resolve-session) session))))))
+
+(ert-deftest claude-code-ide-test-resolve-session-single-session ()
+  "Test that resolve-session returns the only session for directory without prompting."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (let* ((buf (generate-new-buffer " *test-session*"))
+           (session (make-claude-code-ide-session
+                     :session-id "s1" :directory "/tmp/proj/" :buffer buf)))
+      (unwind-protect
+          (progn
+            (puthash "s1" session claude-code-ide--sessions)
+            (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+                       (lambda () "/tmp/proj/")))
+              (should (eq (claude-code-ide--resolve-session) session))))
+        (kill-buffer buf)))))
+
+(ert-deftest claude-code-ide-test-resolve-session-multiple-sessions ()
+  "Test that resolve-session prompts when multiple sessions exist."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (let* ((buf1 (generate-new-buffer " *test-session-1*"))
+           (buf2 (generate-new-buffer " *test-session-2*"))
+           (s1 (make-claude-code-ide-session
+                :session-id "s1" :name "first" :directory "/tmp/proj/" :buffer buf1))
+           (s2 (make-claude-code-ide-session
+                :session-id "s2" :name "second" :directory "/tmp/proj/" :buffer buf2)))
+      (unwind-protect
+          (progn
+            (puthash "s1" s1 claude-code-ide--sessions)
+            (puthash "s2" s2 claude-code-ide--sessions)
+            (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+                       (lambda () "/tmp/proj/"))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt candidates &rest _)
+                         (car (car candidates)))))
+              (let ((result (claude-code-ide--resolve-session)))
+                (should (memq result (list s1 s2))))))
+        (kill-buffer buf1)
+        (kill-buffer buf2)))))
+
+(ert-deftest claude-code-ide-test-resolve-session-no-session ()
+  "Test that resolve-session returns nil when no sessions exist."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+               (lambda () "/tmp/proj/")))
+      (should (null (claude-code-ide--resolve-session))))))
+
+(ert-deftest claude-code-ide-test-send-prompt-multi-session ()
+  "Test that send-prompt prompts user when multiple sessions exist."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (prompted nil))
+    (let* ((buf1 (generate-new-buffer " *test-session-1*"))
+           (buf2 (generate-new-buffer " *test-session-2*"))
+           (s1 (make-claude-code-ide-session
+                :session-id "s1" :name "first" :directory "/tmp/proj/" :buffer buf1))
+           (s2 (make-claude-code-ide-session
+                :session-id "s2" :name "second" :directory "/tmp/proj/" :buffer buf2)))
+      (unwind-protect
+          (progn
+            (puthash "s1" s1 claude-code-ide--sessions)
+            (puthash "s2" s2 claude-code-ide--sessions)
+            (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+                       (lambda () "/tmp/proj/"))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt candidates &rest _)
+                         (setq prompted t)
+                         (car (car candidates))))
+                      ((symbol-function 'claude-code-ide--terminal-send-string)
+                       (lambda (_str) nil))
+                      ((symbol-function 'claude-code-ide--terminal-send-return)
+                       (lambda () nil)))
+              (claude-code-ide-send-prompt "hello")
+              ;; Must have prompted user to select session
+              (should prompted)))
+        (kill-buffer buf1)
+        (kill-buffer buf2)))))
+
+(ert-deftest claude-code-ide-test-send-escape-multi-session ()
+  "Test that send-escape prompts user when multiple sessions exist."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (prompted nil))
+    (let* ((buf1 (generate-new-buffer " *test-session-1*"))
+           (buf2 (generate-new-buffer " *test-session-2*"))
+           (s1 (make-claude-code-ide-session
+                :session-id "s1" :name "first" :directory "/tmp/proj/" :buffer buf1))
+           (s2 (make-claude-code-ide-session
+                :session-id "s2" :name "second" :directory "/tmp/proj/" :buffer buf2)))
+      (unwind-protect
+          (progn
+            (puthash "s1" s1 claude-code-ide--sessions)
+            (puthash "s2" s2 claude-code-ide--sessions)
+            (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+                       (lambda () "/tmp/proj/"))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt candidates &rest _)
+                         (setq prompted t)
+                         (car (car candidates))))
+                      ((symbol-function 'claude-code-ide--terminal-send-escape)
+                       (lambda () nil)))
+              (claude-code-ide-send-escape)
+              ;; Must have prompted user to select session
+              (should prompted)))
+        (kill-buffer buf1)
+        (kill-buffer buf2)))))
+
+(ert-deftest claude-code-ide-test-insert-newline-multi-session ()
+  "Test that insert-newline prompts user when multiple sessions exist."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (prompted nil))
+    (let* ((buf1 (generate-new-buffer " *test-session-1*"))
+           (buf2 (generate-new-buffer " *test-session-2*"))
+           (s1 (make-claude-code-ide-session
+                :session-id "s1" :name "first" :directory "/tmp/proj/" :buffer buf1))
+           (s2 (make-claude-code-ide-session
+                :session-id "s2" :name "second" :directory "/tmp/proj/" :buffer buf2)))
+      (unwind-protect
+          (progn
+            (puthash "s1" s1 claude-code-ide--sessions)
+            (puthash "s2" s2 claude-code-ide--sessions)
+            (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+                       (lambda () "/tmp/proj/"))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt candidates &rest _)
+                         (setq prompted t)
+                         (car (car candidates))))
+                      ((symbol-function 'claude-code-ide--terminal-send-string)
+                       (lambda (_str) nil))
+                      ((symbol-function 'claude-code-ide--terminal-send-return)
+                       (lambda () nil)))
+              (claude-code-ide-insert-newline)
+              ;; Must have prompted user to select session
+              (should prompted)))
+        (kill-buffer buf1)
+        (kill-buffer buf2)))))
+
 ;;; Tests for Helper Functions
 
 (ert-deftest claude-code-ide-test-default-buffer-name ()
@@ -538,36 +680,48 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((test-prompt "Test prompt from minibuffer")
         (prompted-string nil)
         (sent-string nil)
-        (sent-return nil))
-    ;; Mock read-string to return our test prompt
-    (cl-letf (((symbol-function 'read-string)
-               (lambda (prompt &rest _)
-                 (setq prompted-string prompt)
-                 test-prompt))
-              ((symbol-function 'claude-code-ide--get-buffer-name)
-               (lambda () "*test-claude-buffer*"))
-              ((symbol-function 'claude-code-ide--terminal-send-string)
-               (lambda (str) (setq sent-string str)))
-              ((symbol-function 'claude-code-ide--terminal-send-return)
-               (lambda () (setq sent-return t))))
+        (sent-return nil)
+        (claude-code-ide--sessions (make-hash-table :test 'equal)))
+    (with-temp-buffer
+      (let* ((buf (current-buffer))
+             (session (make-claude-code-ide-session
+                       :session-id "s1" :directory "/tmp/proj/" :buffer buf)))
+        (puthash "s1" session claude-code-ide--sessions)
+        ;; Mock read-string to return our test prompt
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (prompt &rest _)
+                     (setq prompted-string prompt)
+                     test-prompt))
+                  ((symbol-function 'claude-code-ide--terminal-send-string)
+                   (lambda (str) (setq sent-string str)))
+                  ((symbol-function 'claude-code-ide--terminal-send-return)
+                   (lambda () (setq sent-return t)))
+                  ((symbol-function 'claude-code-ide--get-working-directory)
+                   (lambda () "/tmp/proj/")))
 
-      ;; Test with existing buffer
-      (with-temp-buffer
-        (rename-buffer "*test-claude-buffer*")
-        (claude-code-ide-send-prompt)
-        (should (equal prompted-string "Claude prompt: "))
-        (should (equal sent-string test-prompt))
-        (should sent-return))
+          ;; Test interactive prompt
+          (claude-code-ide-send-prompt)
+          (should (equal prompted-string "Claude prompt: "))
+          (should (equal sent-string test-prompt))
+          (should sent-return))
 
-      ;; Test with non-existent buffer (should error)
-      (should-error (claude-code-ide-send-prompt) :type 'user-error)
+        ;; Test with no session (should error)
+        (clrhash claude-code-ide--sessions)
+        (cl-letf (((symbol-function 'claude-code-ide--get-working-directory)
+                   (lambda () "/tmp/proj/")))
+          (should-error (claude-code-ide-send-prompt) :type 'user-error))
 
-      ;; Test with empty prompt (should not send anything)
-      (setq sent-string nil sent-return nil)
-      (cl-letf (((symbol-function 'read-string)
-                 (lambda (&rest _) "")))
-        (with-temp-buffer
-          (rename-buffer "*test-claude-buffer*")
+        ;; Test with empty prompt (should not send anything)
+        (puthash "s1" session claude-code-ide--sessions)
+        (setq sent-string nil sent-return nil)
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) ""))
+                  ((symbol-function 'claude-code-ide--terminal-send-string)
+                   (lambda (str) (setq sent-string str)))
+                  ((symbol-function 'claude-code-ide--terminal-send-return)
+                   (lambda () (setq sent-return t)))
+                  ((symbol-function 'claude-code-ide--get-working-directory)
+                   (lambda () "/tmp/proj/")))
           (claude-code-ide-send-prompt)
           (should (null sent-string))
           (should (null sent-return)))))))
