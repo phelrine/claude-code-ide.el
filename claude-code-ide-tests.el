@@ -2606,6 +2606,76 @@ have completed before cleanup.  Waits up to 5 seconds."
       (should (equal "s1" (claude-code-ide-session-session-id found))))
     (should (null (claude-code-ide-mcp--find-session-by-websocket 'other-ws)))))
 
+(ert-deftest claude-code-ide-test-status-multi-agent-permissions ()
+  "Test that multiple PreToolUse events accumulate and PostToolUse drains them."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/")))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Two agents both request permission (PreToolUse x2)
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PreToolUse") (message . "Agent A: Edit")) session)
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PreToolUse") (message . "Agent B: Write")) session)
+    (should (= (claude-code-ide-session-pending-permissions session) 2))
+    (should (eq (claude-code-ide-session-status session) 'idle))
+    ;; Agent A approved
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "Agent A done")) session)
+    (should (= (claude-code-ide-session-pending-permissions session) 1))
+    (should (eq (claude-code-ide-session-status session) 'idle))
+    ;; Agent B approved
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "Agent B done")) session)
+    (should (= (claude-code-ide-session-pending-permissions session) 0))
+    (should (eq (claude-code-ide-session-status session) 'working))))
+
+(ert-deftest claude-code-ide-test-status-stop-survives-subagent ()
+  "Test that Stop event is not cleared by a subsequent PostToolUse."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/")))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Agent stops
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "Stop") (message . "Finished")) session)
+    (should (eq (claude-code-ide-session-stopped session) t))
+    (should (eq (claude-code-ide-session-status session) 'idle))
+    ;; Subagent finishes (PostToolUse arrives after Stop)
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "Subagent done")) session)
+    (should (eq (claude-code-ide-session-stopped session) t))
+    (should (eq (claude-code-ide-session-status session) 'idle))))
+
+(ert-deftest claude-code-ide-test-status-pending-permissions-floor ()
+  "Test that PostToolUse without prior PreToolUse does not go negative."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/")))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; pending-permissions starts at 0; PostToolUse should not make it negative
+    (claude-code-ide-mcp--handle-status-changed
+     '((event . "PostToolUse") (message . "Unexpected")) session)
+    (should (= (claude-code-ide-session-pending-permissions session) 0))
+    (should (eq (claude-code-ide-session-status session) 'working))))
+
+(ert-deftest claude-code-ide-test-status-no-event-field-backward-compat ()
+  "Test that params without event field fall back to direct status assignment."
+  (let ((claude-code-ide--sessions (make-hash-table :test 'equal))
+        (session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/"
+                  :status 'working)))
+    (puthash "s1" session claude-code-ide--sessions)
+    ;; Old-style params: no event field, just status and message
+    (claude-code-ide-mcp--handle-status-changed
+     '((status . "idle") (message . "test")) session)
+    (should (eq (claude-code-ide-session-status session) 'idle))
+    (should (equal (claude-code-ide-session-last-message session) "test"))))
+
 (ert-deftest claude-code-ide-test-handle-status-changed ()
   "Test handling session/statusChanged notification with direct session."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal))

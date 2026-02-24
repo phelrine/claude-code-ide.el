@@ -410,16 +410,36 @@ Optional SESSION contains the MCP session context."
 
 (defun claude-code-ide-mcp--handle-status-changed (params &optional session)
   "Handle a session/statusChanged notification with PARAMS.
-PARAMS is an alist with status and message fields.
+PARAMS is an alist with status, message, and optional event fields.
+When EVENT is present, update stopped/pending-permissions fields and
+derive status; otherwise fall back to direct status assignment.
 Optional SESSION is the resolved session; when nil, falls back to
 looking up session_id from PARAMS for backward compatibility."
   (when-let* ((resolved-session
                (or session
                    (when-let ((session-id (alist-get 'session_id params)))
                      (gethash session-id claude-code-ide--sessions)))))
-    (let ((status (intern (alist-get 'status params "working")))
+    (let ((event (alist-get 'event params))
           (message (alist-get 'message params)))
-      (setf (claude-code-ide-session-status resolved-session) status)
+      (if event
+          ;; Event-based logic
+          (progn
+            (pcase event
+              ("Stop"
+               (setf (claude-code-ide-session-stopped resolved-session) t))
+              ("UserPromptSubmit"
+               (setf (claude-code-ide-session-stopped resolved-session) nil)
+               (setf (claude-code-ide-session-pending-permissions resolved-session) 0))
+              ("PreToolUse"
+               (cl-incf (claude-code-ide-session-pending-permissions resolved-session)))
+              ("PostToolUse"
+               (setf (claude-code-ide-session-pending-permissions resolved-session)
+                     (max 0 (1- (claude-code-ide-session-pending-permissions resolved-session))))))
+            (setf (claude-code-ide-session-status resolved-session)
+                  (claude-code-ide-mcp--derive-status resolved-session)))
+        ;; Backward compat: direct status assignment
+        (setf (claude-code-ide-session-status resolved-session)
+              (intern (alist-get 'status params "working"))))
       (when message
         (setf (claude-code-ide-session-last-message resolved-session) message))
       (setf (claude-code-ide-session-status-updated-at resolved-session) (float-time))
