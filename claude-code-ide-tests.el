@@ -230,10 +230,14 @@ have completed before cleanup.  Waits up to 5 seconds."
                   :directory "/tmp/proj/"
                   :status 'working
                   :last-message "Reading file"
-                  :status-updated-at 1000.0)))
+                  :status-updated-at 1000.0
+                  :stopped t
+                  :pending-permissions 2)))
     (should (eq (claude-code-ide-session-status session) 'working))
     (should (equal (claude-code-ide-session-last-message session) "Reading file"))
-    (should (= (claude-code-ide-session-status-updated-at session) 1000.0))))
+    (should (= (claude-code-ide-session-status-updated-at session) 1000.0))
+    (should (eq (claude-code-ide-session-stopped session) t))
+    (should (= (claude-code-ide-session-pending-permissions session) 2))))
 
 (ert-deftest claude-code-ide-test-session-status-defaults ()
   "Test default values for status fields."
@@ -2687,9 +2691,11 @@ have completed before cleanup.  Waits up to 5 seconds."
     ;; Pass session directly (new signature)
     (claude-code-ide-mcp--handle-status-changed
      '((status . "idle")
+       (event . "Stop")
        (message . "Done fixing the bug"))
      session)
     (should (eq (claude-code-ide-session-status session) 'idle))
+    (should (eq (claude-code-ide-session-stopped session) t))
     (should (equal (claude-code-ide-session-last-message session) "Done fixing the bug"))
     (should (claude-code-ide-session-status-updated-at session))))
 
@@ -2878,6 +2884,7 @@ have completed before cleanup.  Waits up to 5 seconds."
          (message `((jsonrpc . "2.0")
                     (method . "session/statusChanged")
                     (params . ((status . "working")
+                               (event . "PostToolUse")
                                (message . "Editing"))))))
     (cl-letf (((symbol-function 'claude-code-ide-mcp--handle-status-changed)
                (lambda (params session)
@@ -2965,7 +2972,7 @@ have completed before cleanup.  Waits up to 5 seconds."
         (should (= 1 (length (funcall tabulated-list-entries))))))))
 
 (ert-deftest claude-code-ide-test-status-lifecycle ()
-  "Test full status update lifecycle."
+  "Test full status update lifecycle with event-based tracking."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
     ;; Create session (starts as idle)
     (puthash "s1" (make-claude-code-ide-session
@@ -2974,24 +2981,33 @@ have completed before cleanup.  Waits up to 5 seconds."
              claude-code-ide--sessions)
     (let ((session (gethash "s1" claude-code-ide--sessions)))
       (should (eq (claude-code-ide-session-status session) 'idle))
-      ;; Simulate Stop hook -> idle (pass session directly)
+      ;; UserPromptSubmit -> working (resets stopped, clears pending)
       (claude-code-ide-mcp--handle-status-changed
-       '((status . "idle") (message . "All done"))
-       session)
-      (should (eq (claude-code-ide-session-status session) 'idle))
-      (should (equal (claude-code-ide-session-last-message session) "All done"))
-      ;; Simulate PreToolUse hook -> idle (permission prompt)
-      (claude-code-ide-mcp--handle-status-changed
-       '((status . "idle") (message . "Edit"))
-       session)
-      (should (eq (claude-code-ide-session-status session) 'idle))
-      (should (equal (claude-code-ide-session-last-message session) "Edit"))
-      ;; Simulate PostToolUse hook -> active (tool executing)
-      (claude-code-ide-mcp--handle-status-changed
-       '((status . "working") (message . "Edit"))
+       '((status . "working") (event . "UserPromptSubmit"))
        session)
       (should (eq (claude-code-ide-session-status session) 'working))
-      (should (equal (claude-code-ide-session-last-message session) "Edit")))))
+      (should (eq (claude-code-ide-session-stopped session) nil))
+      (should (= (claude-code-ide-session-pending-permissions session) 0))
+      ;; PreToolUse -> idle (permission prompt)
+      (claude-code-ide-mcp--handle-status-changed
+       '((status . "idle") (event . "PreToolUse") (message . "Edit"))
+       session)
+      (should (eq (claude-code-ide-session-status session) 'idle))
+      (should (= (claude-code-ide-session-pending-permissions session) 1))
+      (should (equal (claude-code-ide-session-last-message session) "Edit"))
+      ;; PostToolUse -> working (permission granted)
+      (claude-code-ide-mcp--handle-status-changed
+       '((status . "working") (event . "PostToolUse") (message . "Edit"))
+       session)
+      (should (eq (claude-code-ide-session-status session) 'working))
+      (should (= (claude-code-ide-session-pending-permissions session) 0))
+      ;; Stop -> idle (finished)
+      (claude-code-ide-mcp--handle-status-changed
+       '((status . "idle") (event . "Stop") (message . "All done"))
+       session)
+      (should (eq (claude-code-ide-session-status session) 'idle))
+      (should (eq (claude-code-ide-session-stopped session) t))
+      (should (equal (claude-code-ide-session-last-message session) "All done")))))
 
 (provide 'claude-code-ide-tests)
 
