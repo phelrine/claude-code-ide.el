@@ -754,10 +754,19 @@ If `claude-code-ide-focus-on-open' is non-nil, the window is selected."
 ;;; Status Hook Management
 
 (defun claude-code-ide--package-scripts-dir ()
-  "Return the path to the scripts/ directory within this package."
-  (let ((pkg-dir (file-name-directory (file-truename (or load-file-name
-                                                         (locate-library "claude-code-ide")
-                                                         (buffer-file-name))))))
+  "Return the path to the scripts/ directory within this package.
+Resolves symlinks so that the real source directory is returned even
+when loaded from a `straight.el' build directory.  When the path
+points to a byte-compiled .elc file (which is a real file, not a
+symlink), it falls back to the corresponding .el symlink first."
+  (let* ((lib-path (or load-file-name
+                       (locate-library "claude-code-ide")
+                       (buffer-file-name)))
+         (source-path (if (and lib-path (string-suffix-p ".elc" lib-path))
+                          (let ((el (concat (file-name-sans-extension lib-path) ".el")))
+                            (if (file-exists-p el) el lib-path))
+                        lib-path))
+         (pkg-dir (file-name-directory (file-truename source-path))))
     (expand-file-name "scripts/" pkg-dir)))
 
 (defconst claude-code-ide--status-hook-command "python3 ~/.claude/hooks/status-notify.py"

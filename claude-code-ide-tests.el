@@ -2741,6 +2741,34 @@ have completed before cleanup.  Waits up to 5 seconds."
               (should (string-prefix-p (file-truename real-dir) (file-truename result))))))
       (delete-directory tmpdir t))))
 
+(ert-deftest claude-code-ide-test-package-scripts-dir-resolves-elc ()
+  "Test that package-scripts-dir resolves .elc via .el symlink."
+  (let* ((tmpdir (make-temp-file "claude-test-" t))
+         (real-dir (expand-file-name "real/" tmpdir))
+         (real-file (expand-file-name "claude-code-ide.el" real-dir))
+         (build-dir (expand-file-name "build/" tmpdir))
+         (build-el (expand-file-name "claude-code-ide.el" build-dir))
+         (build-elc (expand-file-name "claude-code-ide.elc" build-dir)))
+    (unwind-protect
+        (progn
+          (make-directory real-dir t)
+          (make-directory build-dir t)
+          (with-temp-file real-file
+            (insert ";; dummy"))
+          ;; .el is a symlink (like straight.el build/)
+          (make-symbolic-link real-file build-el t)
+          ;; .elc is a real file (byte-compiled)
+          (with-temp-file build-elc
+            (insert ";; compiled"))
+          ;; locate-library returns .elc; should still resolve to real-dir
+          (cl-letf (((symbol-function 'locate-library)
+                     (lambda (_lib &rest _) build-elc)))
+            (let ((load-file-name nil))
+              (let ((result (claude-code-ide--package-scripts-dir)))
+                (should (string-prefix-p (file-truename real-dir)
+                                         (file-truename result)))))))
+      (delete-directory tmpdir t))))
+
 (ert-deftest claude-code-ide-test-handle-message-forwards-session-to-status-changed ()
   "Test that handle-message forwards session to handle-status-changed."
   (let* ((captured-session nil)
