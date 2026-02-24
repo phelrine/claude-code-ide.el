@@ -244,6 +244,14 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (null (claude-code-ide-session-last-message session)))
     (should (null (claude-code-ide-session-status-updated-at session)))))
 
+(ert-deftest claude-code-ide-test-session-new-status-fields ()
+  "Test that session struct has stopped and pending-permissions fields."
+  (let ((session (make-claude-code-ide-session
+                  :session-id "s1"
+                  :directory "/tmp/proj/")))
+    (should (eq (claude-code-ide-session-stopped session) nil))
+    (should (= (claude-code-ide-session-pending-permissions session) 0))))
+
 (ert-deftest claude-code-ide-test-sessions-hash-table ()
   "Test the global sessions hash table."
   (let ((claude-code-ide--sessions (make-hash-table :test 'equal)))
