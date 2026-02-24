@@ -80,6 +80,13 @@
 (defconst claude-code-ide-mcp-initial-notification-delay 0.1
   "Delay in seconds before sending initial notifications after connection.")
 
+(defcustom claude-code-ide-permission-debounce-seconds 2
+  "Seconds to wait before marking a session as permission-pending.
+When a PreToolUse event arrives, a timer is started.  If no PostToolUse
+follows within this many seconds, `permission-pending' is set to t."
+  :type 'number
+  :group 'claude-code-ide)
+
 ;;; Variables
 
 ;; Buffer-local cache variables for performance optimization
