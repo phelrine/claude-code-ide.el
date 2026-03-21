@@ -213,10 +213,13 @@ This is a convenience function that combines
               (message . ,message)
               ,@(when data `((data . ,data)))))))
 
-(defun claude-code-ide-mcp--send-notification (method params)
-  "Send a JSON-RPC notification with METHOD and PARAMS to the current session."
-  ;; Try to use cached session first
-  (when-let* ((session (or (when (and claude-code-ide-mcp--buffer-cache-valid
+(defun claude-code-ide-mcp--send-notification (method params &optional session)
+  "Send a JSON-RPC notification with METHOD and PARAMS.
+If SESSION is provided, send to that session.
+Otherwise, look up the session for the current buffer."
+  ;; Use provided session or look up from buffer context
+  (when-let* ((session (or session
+                           (when (and claude-code-ide-mcp--buffer-cache-valid
                                       claude-code-ide-mcp--buffer-session-cache)
                              claude-code-ide-mcp--buffer-session-cache)
                            (when-let* ((project-dir (claude-code-ide-mcp--get-buffer-project))
@@ -344,9 +347,15 @@ Optional SESSION contains the MCP session context."
                              (storage-key (if unique-key
                                               (format "%s-%s" tool-name unique-key)
                                             tool-name))
-                             ;; Get session from result or try to find current session
+                             ;; Get session from result, fall back to the session that
+                             ;; received this tool call, then try current buffer's session.
+                             ;; Using the passed-in session is critical for multi-session
+                             ;; correctness: get-current-session returns the first matching
+                             ;; session for a project, which may be wrong when multiple
+                             ;; sessions exist for the same directory.
                              (result-session (alist-get 'session result))
                              (session (or result-session
+                                          session
                                           (claude-code-ide-mcp--get-current-session))))
                         (if session
                             (let ((session-deferred (claude-code-ide-session-deferred session)))
@@ -528,34 +537,39 @@ Optional SESSION contains the MCP session context."
                claude-code-ide--sessions))
 
     (if session
-        (progn
-          ;; Update session with client
-          (setf (claude-code-ide-session-client session) ws)
-          (claude-code-ide-debug "Claude Code connected to MCP server for %s"
-                                 (file-name-nondirectory
-                                  (directory-file-name (claude-code-ide-session-directory session))))
+        (let ((existing-client (claude-code-ide-session-client session)))
+          (if existing-client
+              ;; Session already has a client (the real CLI connection).
+              ;; This is likely a transient connection (e.g. status-notify
+              ;; script).  Do NOT overwrite the real client.
+              (claude-code-ide-debug "Ignoring secondary WebSocket connection (session already has a client)")
+            ;; First client connection -- this is the real CLI
+            (setf (claude-code-ide-session-client session) ws)
+            (claude-code-ide-debug "Claude Code connected to MCP server for %s"
+                                   (file-name-nondirectory
+                                    (directory-file-name (claude-code-ide-session-directory session))))
 
-          ;; Send initial active editor notification if we have one in the project
-          (let ((file-path (buffer-file-name))
-                (project-dir (claude-code-ide-session-directory session)))
-            (when (and file-path
-                       project-dir
-                       (string-prefix-p (expand-file-name project-dir)
-                                        (expand-file-name file-path)))
-              (setf (claude-code-ide-session-last-buffer session) (current-buffer))
-              ;; Update MCP tools server's last active buffer
-              (claude-code-ide-mcp-server-update-last-active-buffer
-               (claude-code-ide-session-session-id session) (current-buffer))
-              (run-at-time claude-code-ide-mcp-initial-notification-delay nil
-                           (lambda ()
-                             (when-let ((s (claude-code-ide-mcp--get-session-for-project project-dir)))
-                               (let ((file-path (buffer-file-name)))
-                                 (claude-code-ide-mcp--send-notification
-                                  "workspace/didChangeActiveEditor"
-                                  `((uri . ,(concat "file://" file-path))
-                                    (path . ,file-path)
-                                    (name . ,(buffer-name))))))))))
-          (claude-code-ide-debug "Warning: Could not find session for WebSocket connection")))))
+            ;; Send initial active editor notification if we have one in the project
+            (let ((file-path (buffer-file-name))
+                  (project-dir (claude-code-ide-session-directory session)))
+              (when (and file-path
+                         project-dir
+                         (string-prefix-p (expand-file-name project-dir)
+                                          (expand-file-name file-path)))
+                (setf (claude-code-ide-session-last-buffer session) (current-buffer))
+                ;; Update MCP tools server's last active buffer
+                (claude-code-ide-mcp-server-update-last-active-buffer
+                 (claude-code-ide-session-session-id session) (current-buffer))
+                (run-at-time claude-code-ide-mcp-initial-notification-delay nil
+                             (lambda ()
+                               (when-let ((s (claude-code-ide-mcp--get-session-for-project project-dir)))
+                                 (let ((file-path (buffer-file-name)))
+                                   (claude-code-ide-mcp--send-notification
+                                    "workspace/didChangeActiveEditor"
+                                    `((uri . ,(concat "file://" file-path))
+                                      (path . ,file-path)
+                                      (name . ,(buffer-name))))))))))))
+      (claude-code-ide-debug "Warning: Could not find session for WebSocket connection"))))
 
 (defun claude-code-ide-mcp--on-message (ws frame)
   "Handle incoming WebSocket message from WS in FRAME."
@@ -843,10 +857,6 @@ Sets the port and server fields on the session struct.  Returns the port."
           (when (and claude-code-ide-mcp--buffer-project-cache
                      (string= claude-code-ide-mcp--buffer-project-cache project-dir))
             (claude-code-ide-mcp--invalidate-buffer-cache))))
-      ;; Remove hooks if no more sessions
-      (when (= 0 (hash-table-count claude-code-ide--sessions))
-        (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-selection)
-        (remove-hook 'post-command-hook #'claude-code-ide-mcp--track-active-buffer))
       (claude-code-ide-debug "MCP server stopped for %s"
                              (file-name-nondirectory (directory-file-name project-dir))))))
 
@@ -864,8 +874,8 @@ Sets the port and server fields on the session struct.  Returns the port."
         (dolist (id session-ids)
           (claude-code-ide-mcp-stop-session id))))))
 
-(defun claude-code-ide-mcp-send-at-mentioned ()
-  "Send at-mentioned notification.
+(defun claude-code-ide-mcp-send-at-mentioned (&optional session)
+  "Send at-mentioned notification to SESSION.
 If a region is selected, send the selected lines.
 Otherwise, send the current line."
   (let* ((file-path (or (buffer-file-name) ""))
@@ -879,7 +889,8 @@ Otherwise, send the current line."
      "at_mentioned"
      `((filePath . ,file-path)
        (lineStart . ,start-line)
-       (lineEnd . ,end-line)))))
+       (lineEnd . ,end-line))
+     session)))
 
 (defun claude-code-ide-mcp-complete-deferred (session tool-name result &optional unique-key)
   "Complete a deferred response for SESSION and TOOL-NAME with RESULT.
