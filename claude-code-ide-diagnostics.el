@@ -37,7 +37,7 @@
 (require 'flymake nil t)
 
 ;; Forward declarations
-(declare-function claude-code-ide-mcp-session-project-dir "claude-code-ide-mcp" (session))
+(declare-function claude-code-ide-session-directory "claude-code-ide" (session))
 
 ;; Flycheck declarations
 (defvar flycheck-current-errors)
@@ -193,7 +193,7 @@ Optional SESSION contains the MCP session context."
   (let* ((uri (alist-get 'uri params))
          (diagnostics-by-file '())
          (project-dir (when session
-                        (claude-code-ide-mcp-session-project-dir session))))
+                        (claude-code-ide-session-directory session))))
     (claude-code-ide-debug "Diagnostics handler called with URI: %s, project-dir: %s" uri project-dir)
     (if (and uri (not (string-empty-p uri)))
         ;; Get diagnostics for specific file

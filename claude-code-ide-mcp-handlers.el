@@ -38,9 +38,9 @@
 (declare-function claude-code-ide-mcp--get-current-session "claude-code-ide-mcp" ())
 (declare-function claude-code-ide-mcp--get-session-for-project "claude-code-ide-mcp" (project-dir))
 (declare-function claude-code-ide-mcp--get-buffer-project "claude-code-ide-mcp" ())
-(declare-function claude-code-ide-mcp-session-active-diffs "claude-code-ide-mcp" (session))
-(declare-function claude-code-ide-mcp-session-original-tab "claude-code-ide-mcp" (session))
-(declare-function claude-code-ide-mcp-session-project-dir "claude-code-ide-mcp" (session))
+(declare-function claude-code-ide-session-active-diffs "claude-code-ide" (session))
+(declare-function claude-code-ide-session-original-tab "claude-code-ide" (session))
+(declare-function claude-code-ide-session-directory "claude-code-ide" (session))
 (declare-function claude-code-ide-mcp--setup-buffer-cache-hooks "claude-code-ide-mcp" ())
 (declare-function claude-code-ide--get-buffer-name "claude-code-ide" (&optional directory))
 (declare-function claude-code-ide--display-buffer-in-side-window "claude-code-ide" (buffer))
@@ -48,7 +48,7 @@
 (defvar ediff-window-setup-function)
 (defvar ediff-split-window-function)
 (defvar ediff-control-buffer-suffix)
-(defvar claude-code-ide-mcp--sessions)
+(defvar claude-code-ide--sessions)
 (defvar claude-code-ide-show-claude-window-in-ediff)
 (defvar claude-code-ide-focus-claude-after-ediff)
 (defvar claude-code-ide-switch-tab-on-ediff)
@@ -78,12 +78,12 @@ Returns the session if found, nil otherwise."
   (let ((expanded-file (expand-file-name file-path))
         (found-session nil))
     (catch 'found
-      (maphash (lambda (project-dir session)
-                 (when (string-prefix-p (expand-file-name project-dir)
+      (maphash (lambda (_id session)
+                 (when (string-prefix-p (expand-file-name (claude-code-ide-session-directory session))
                                         expanded-file)
                    (setq found-session session)
                    (throw 'found t)))
-               claude-code-ide-mcp--sessions))
+               claude-code-ide--sessions))
     found-session))
 
 (defun claude-code-ide-mcp--find-claude-side-window ()
@@ -101,9 +101,9 @@ Returns the window if found, nil otherwise."
   "Get the active diffs hash table for the current session.
 If SESSION is provided, use it instead of looking up the current session."
   (if session
-      (claude-code-ide-mcp-session-active-diffs session)
+      (claude-code-ide-session-active-diffs session)
     (if-let ((current-session (claude-code-ide-mcp--get-current-session)))
-        (claude-code-ide-mcp-session-active-diffs current-session)
+        (claude-code-ide-session-active-diffs current-session)
       ;; No session found - return nil
       nil)))
 
@@ -204,7 +204,7 @@ STARTUP-HOOK-FN is the hook function to remove after use."
           (claude-window nil))
       ;; Restore Claude side window only if user wants it shown during ediff
       (when claude-code-ide-show-claude-window-in-ediff
-        (when-let* ((project-dir (claude-code-ide-mcp-session-project-dir session))
+        (when-let* ((project-dir (claude-code-ide-session-directory session))
                     (claude-buffer-name (claude-code-ide--get-buffer-name project-dir))
                     (claude-buffer (get-buffer claude-buffer-name)))
           (when (buffer-live-p claude-buffer)
@@ -399,14 +399,14 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
              (found-diff-info nil))
         ;; Search all sessions for this diff tab
         (catch 'found
-          (maphash (lambda (_proj-dir session)
-                     (let* ((session-diffs (claude-code-ide-mcp-session-active-diffs session))
+          (maphash (lambda (_id session)
+                     (let* ((session-diffs (claude-code-ide-session-active-diffs session))
                             (diff-info (gethash tab-name session-diffs)))
                        (when diff-info
                          (setq found-session session
                                found-diff-info diff-info)
                          (throw 'found t))))
-                   claude-code-ide-mcp--sessions))
+                   claude-code-ide--sessions))
         (if found-diff-info
             (progn
               ;; Check if ediff is still active and quit it using stored control buffer
@@ -424,7 +424,7 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
                       (setf (alist-get 'fine-diff-buffer found-diff-info) ediff-fine-diff-buffer))
                     (when (and (boundp 'ediff-custom-diff-buffer) ediff-custom-diff-buffer)
                       (setf (alist-get 'custom-diff-buffer found-diff-info) ediff-custom-diff-buffer)))
-                  (puthash tab-name found-diff-info (claude-code-ide-mcp-session-active-diffs found-session))
+                  (puthash tab-name found-diff-info (claude-code-ide-session-active-diffs found-session))
                   ;; Use ediff's proper quit mechanism if available
                   (condition-case err
                       (if (fboundp 'ediff-really-quit)
@@ -494,8 +494,8 @@ ARGUMENTS should contain:
 
     ;; Switch to original tab if we're on a different one (when configured)
     (when (and claude-code-ide-switch-tab-on-ediff
-               (claude-code-ide-mcp-session-original-tab session))
-      (let ((original-tab (claude-code-ide-mcp-session-original-tab session)))
+               (claude-code-ide-session-original-tab session))
+      (let ((original-tab (claude-code-ide-session-original-tab session)))
         (when (and (fboundp 'tab-bar-mode)
                    tab-bar-mode
                    (fboundp 'tab-bar--current-tab)
@@ -696,7 +696,7 @@ SESSION is the MCP session to use - if not provided, tries to determine it."
         (current-session (claude-code-ide-mcp--get-current-session)))
     (if current-session
         ;; Only clean up diffs for the current session
-        (let ((session-diffs (claude-code-ide-mcp-session-active-diffs current-session)))
+        (let ((session-diffs (claude-code-ide-session-active-diffs current-session)))
           (maphash (lambda (tab-name _diff-info)
                      (claude-code-ide-mcp--cleanup-diff tab-name current-session)
                      (setq closed-count (1+ closed-count)))
@@ -705,7 +705,7 @@ SESSION is the MCP session to use - if not provided, tries to determine it."
       (when-let ((project-dir (claude-code-ide-mcp--get-buffer-project)))
         (when-let ((session (claude-code-ide-mcp--get-session-for-project
                              project-dir)))
-          (let ((session-diffs (claude-code-ide-mcp-session-active-diffs session)))
+          (let ((session-diffs (claude-code-ide-session-active-diffs session)))
             (maphash (lambda (tab-name _diff-info)
                        (claude-code-ide-mcp--cleanup-diff tab-name session)
                        (setq closed-count (1+ closed-count)))
