@@ -25,7 +25,6 @@
 ;; CRITICAL DISCOVERY: Claude Code tools only work when launched from VS Code/editor terminals
 ;; because the extensions set these environment variables:
 ;; - CLAUDE_CODE_SSE_PORT: The WebSocket server port created by the extension
-;; - ENABLE_IDE_INTEGRATION: Set to "true" to enable MCP tools
 ;; - FORCE_CODE_TERMINAL: Set to "true" to enable terminal features
 ;;
 ;; Workflow:
@@ -136,6 +135,47 @@
   nil)
 
 (provide (quote vterm))
+
+;; === Mock ghostel module ===
+(defvar ghostel-buffer-name nil)
+(defvar ghostel-set-title-function #'ignore)
+(defvar ghostel-enable-title-tracking t)
+(defvar ghostel-kill-buffer-on-exit t)
+
+(defun ghostel (&optional _arg)
+  "Mock ghostel function for testing."
+  (let ((buffer (get-buffer-create (or ghostel-buffer-name "*ghostel*"))))
+    (set-buffer buffer)
+    (with-current-buffer buffer
+      (make-process :name "mock-ghostel"
+                    :buffer buffer
+                    :command '("true")
+                    :connection-type 'pty))
+    buffer))
+
+(defun ghostel-exec (buffer _program &optional _args)
+  "Mock ghostel-exec function for testing."
+  (with-current-buffer buffer
+    (make-process :name "mock-ghostel"
+                  :buffer buffer
+                  :command '("true")
+                  :connection-type 'pty)))
+
+(defun ghostel-send-string (_string)
+  "Mock ghostel send function for testing."
+  nil)
+
+(defun ghostel--window-adjust-process-window-size (_process _windows)
+  "Mock ghostel resize handler for testing."
+  '(80 . 24))
+
+(provide (quote ghostel))
+
+;; === Mock evil-ghostel module ===
+;; These stand in for the evil-ghostel package's variables so the ESC
+;; routing helper can be exercised in batch mode without evil installed.
+(defvar evil-ghostel-mode nil)
+(defvar evil-ghostel--escape-mode nil)
 
 ;; === Mock Emacs display functions ===
 (unless (fboundp 'display-buffer-in-side-window)
@@ -618,6 +658,21 @@ have completed before cleanup.  Waits up to 5 seconds."
       (should-error (claude-code-ide)
                     :type 'user-error))))
 
+(ert-deftest claude-code-ide-test-run-without-ghostel ()
+  "Test run command when ghostel is not available."
+  (let ((claude-code-ide--cli-available t)
+        (claude-code-ide-cli-path "echo")
+        (claude-code-ide-terminal-backend 'ghostel)
+        (orig-featurep (symbol-function 'featurep)))
+    (cl-letf (((symbol-function 'featurep)
+               (lambda (sym &rest _) (if (eq sym 'ghostel) nil (funcall orig-featurep sym))))
+              ((symbol-function 'require)
+               (lambda (feature &optional filename noerror)
+                 (unless (eq feature 'ghostel)
+                   (require feature filename noerror)))))
+      (should-error (claude-code-ide)
+                    :type 'user-error))))
+
 (ert-deftest claude-code-ide-test-terminal-backend-selection ()
   "Test terminal backend selection and validation."
   ;; Test vterm backend
@@ -627,6 +682,10 @@ have completed before cleanup.  Waits up to 5 seconds."
   ;; Test eat backend
   (let ((claude-code-ide-terminal-backend 'eat))
     (should (eq claude-code-ide-terminal-backend 'eat)))
+
+  ;; Test ghostel backend
+  (let ((claude-code-ide-terminal-backend 'ghostel))
+    (should (eq claude-code-ide-terminal-backend 'ghostel)))
 
   ;; Test invalid backend
   (let ((claude-code-ide-terminal-backend 'invalid-backend)
@@ -642,7 +701,8 @@ have completed before cleanup.  Waits up to 5 seconds."
   (let ((vterm-string-sent nil)
         (vterm-escape-sent nil)
         (vterm-return-sent nil)
-        (eat-string-sent nil))
+        (eat-string-sent nil)
+        (ghostel-string-sent nil))
     (cl-letf (((symbol-function 'vterm-send-string)
                (lambda (str) (setq vterm-string-sent str)))
               ((symbol-function 'vterm-send-escape)
@@ -650,7 +710,9 @@ have completed before cleanup.  Waits up to 5 seconds."
               ((symbol-function 'vterm-send-return)
                (lambda () (setq vterm-return-sent t)))
               ((symbol-function 'eat-term-send-string)
-               (lambda (term str) (setq eat-string-sent str))))
+               (lambda (term str) (setq eat-string-sent str)))
+              ((symbol-function 'ghostel-send-string)
+               (lambda (str) (setq ghostel-string-sent str))))
 
       ;; Test vterm backend
       (let ((claude-code-ide-terminal-backend 'vterm))
@@ -677,7 +739,21 @@ have completed before cleanup.  Waits up to 5 seconds."
 
           (setq eat-string-sent nil)
           (claude-code-ide--terminal-send-return)
-          (should (equal eat-string-sent "\r")))))))
+          (should (equal eat-string-sent "\r"))))
+
+      ;; Test ghostel backend
+      (with-temp-buffer
+        (let ((claude-code-ide-terminal-backend 'ghostel))
+          (claude-code-ide--terminal-send-string "test")
+          (should (equal ghostel-string-sent "test"))
+
+          (setq ghostel-string-sent nil)
+          (claude-code-ide--terminal-send-escape)
+          (should (equal ghostel-string-sent "\e"))
+
+          (setq ghostel-string-sent nil)
+          (claude-code-ide--terminal-send-return)
+          (should (equal ghostel-string-sent "\r")))))))
 
 (ert-deftest claude-code-ide-test-send-prompt-command ()
   "Test the claude-code-ide-send-prompt command."
@@ -734,6 +810,11 @@ have completed before cleanup.  Waits up to 5 seconds."
   "Test terminal session creation with both backends."
   (let ((mock-vterm-buffer nil)
         (mock-eat-buffer nil)
+        (mock-ghostel-buffer nil)
+        (mock-ghostel-program nil)
+        (mock-ghostel-args nil)
+        (mock-ghostel-env nil)
+        (mock-ghostel-default-directory nil)
         (mock-process (start-process "mock" nil "true")))
     (cl-letf (((symbol-function 'claude-code-ide--terminal-ensure-backend)
                (lambda () nil))  ; Mock the ensure function to do nothing
@@ -745,6 +826,15 @@ have completed before cleanup.  Waits up to 5 seconds."
               ((symbol-function 'eat-exec)
                (lambda (buffer name cmd startfile args)
                  (setq mock-eat-buffer buffer)))
+              ((symbol-function 'ghostel-exec)
+               (lambda (buffer program &optional args)
+                 (setq mock-ghostel-buffer buffer)
+                 (setq mock-ghostel-program program)
+                 (setq mock-ghostel-args args)
+                 (setq mock-ghostel-env process-environment)
+                 (setq mock-ghostel-default-directory default-directory)
+                 (setq-local ghostel-set-title-function #'ignore)
+                 mock-process))
               ((symbol-function 'get-buffer-process)
                (lambda (buffer) mock-process))
               ((symbol-function 'claude-code-ide-mcp-start)
@@ -772,7 +862,51 @@ have completed before cleanup.  Waits up to 5 seconds."
             (should (consp result))
             (should (bufferp (car result)))
             (should (processp (cdr result)))
-            (should (bufferp mock-eat-buffer))))))))
+            (should (bufferp mock-eat-buffer)))))
+
+      ;; Test ghostel backend session creation
+      (let ((claude-code-ide-terminal-backend 'ghostel)
+            (claude-code-ide--cli-available t))
+        (cl-letf (((symbol-function 'claude-code-ide--build-claude-command)
+                   (lambda (&rest _) "claude --print \"hello world\"")))
+          (let ((result (claude-code-ide--create-terminal-session
+                         "*test-ghostel*" "/tmp" 12345 nil nil "test-session")))
+            (should (consp result))
+            (should (bufferp (car result)))
+            (should (processp (cdr result)))
+            (should (equal (buffer-name mock-ghostel-buffer) "*test-ghostel*"))
+            (should (equal mock-ghostel-program "claude"))
+            (should (equal mock-ghostel-args '("--print" "hello world")))
+            (should (equal mock-ghostel-default-directory "/tmp"))
+            (with-current-buffer mock-ghostel-buffer
+              (should (null ghostel-set-title-function)))
+            (should (member "CLAUDE_CODE_SSE_PORT=12345" mock-ghostel-env))
+            (should (member "TERM_PROGRAM=emacs" mock-ghostel-env))
+            (should (member "FORCE_CODE_TERMINAL=true" mock-ghostel-env))))))))
+
+(ert-deftest claude-code-ide-test-ghostel-evil-escape-override ()
+  "Test that the ghostel evil ESC routing is overridden per buffer."
+  ;; Overrides the buffer-local escape mode when evil-ghostel-mode is on.
+  (with-temp-buffer
+    (setq-local evil-ghostel-mode t)
+    (setq-local evil-ghostel--escape-mode 'auto)
+    (let ((claude-code-ide-ghostel-evil-escape 'evil))
+      (claude-code-ide--apply-ghostel-evil-escape)
+      (should (eq evil-ghostel--escape-mode 'evil))))
+  ;; A nil setting leaves the value seeded from the global default alone.
+  (with-temp-buffer
+    (setq-local evil-ghostel-mode t)
+    (setq-local evil-ghostel--escape-mode 'auto)
+    (let ((claude-code-ide-ghostel-evil-escape nil))
+      (claude-code-ide--apply-ghostel-evil-escape)
+      (should (eq evil-ghostel--escape-mode 'auto))))
+  ;; No-op when evil-ghostel-mode is not active in the buffer.
+  (with-temp-buffer
+    (setq-local evil-ghostel-mode nil)
+    (setq-local evil-ghostel--escape-mode 'auto)
+    (let ((claude-code-ide-ghostel-evil-escape 'evil))
+      (claude-code-ide--apply-ghostel-evil-escape)
+      (should (eq evil-ghostel--escape-mode 'auto)))))
 
 (ert-deftest claude-code-ide-test-vterm-smart-renderer-passthrough ()
   "Test that vterm smart renderer passes through normal text immediately."
@@ -1325,8 +1459,7 @@ have completed before cleanup.  Waits up to 5 seconds."
   "Test the openFile tool implementation."
   ;; Test successful file open
   (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3\nLine 4"
-                                             (let ((result (claude-code-ide-mcp-handle-open-file `((path . ,test-file)))))
-                                               ;; Handler returns VS Code format
+                                             (let ((result (claude-code-ide-mcp-handle-open-file `((filePath . ,test-file)))))
                                                (should (listp result))
                                                (let ((first-item (car result)))
                                                  (should (equal (alist-get 'type first-item) "text"))
@@ -1337,10 +1470,9 @@ have completed before cleanup.  Waits up to 5 seconds."
   ;; Test with selection
   (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3\nLine 4"
                                              (let ((result (claude-code-ide-mcp-handle-open-file
-                                                            `((path . ,test-file)
+                                                            `((filePath . ,test-file)
                                                               (startLine . 2)
                                                               (endLine . 3)))))
-                                               ;; Handler returns VS Code format
                                                (should (listp result))
                                                (let ((first-item (car result)))
                                                  (should (equal (alist-get 'type first-item) "text"))
@@ -1349,12 +1481,12 @@ have completed before cleanup.  Waits up to 5 seconds."
                                                (should (= (line-number-at-pos (region-beginning)) 2))
                                                (kill-buffer)))
 
-  ;; Test missing path parameter
+  ;; Test missing filePath parameter
   (should-error (claude-code-ide-mcp-handle-open-file '())
                 :type 'mcp-error))
 
 (ert-deftest claude-code-ide-test-mcp-get-current-selection ()
-  "Test the getCurrentSelection tool implementation."
+  "Test the selection payload builder."
   ;; Test with active selection
   (claude-code-ide-mcp-tests--with-temp-buffer "Line 1\nLine 2\nLine 3"
                                                (goto-char (point-min))
@@ -1363,11 +1495,12 @@ have completed before cleanup.  Waits up to 5 seconds."
                                                ;; Ensure transient-mark-mode is on and region is active
                                                (let ((transient-mark-mode t))
                                                  (activate-mark)
-                                                 (let ((result (claude-code-ide-mcp-handle-get-current-selection nil)))
+                                                 (let ((result (claude-code-ide-mcp--get-current-selection)))
                                                    (should (equal (alist-get 'text result) "Line 1\nLine 2\n"))
-                                                   ;; Check the selection structure
+                                                   (should-not (assq 'fileUrl result))
                                                    (let ((selection (alist-get 'selection result)))
                                                      (should selection)
+                                                     (should-not (assq 'isEmpty selection))
                                                      (let ((start (alist-get 'start selection))
                                                            (end (alist-get 'end selection)))
                                                        (should (= (alist-get 'line start) 1))  ; 1-based
@@ -1375,70 +1508,15 @@ have completed before cleanup.  Waits up to 5 seconds."
 
   ;; Test without selection
   (claude-code-ide-mcp-tests--with-temp-buffer "Test"
-                                               (let ((result (claude-code-ide-mcp-handle-get-current-selection nil)))
+                                               (let ((result (claude-code-ide-mcp--get-current-selection)))
                                                  (should (equal (alist-get 'text result) ""))
-                                                 ;; When no selection, we should get the selection structure
                                                  (let ((selection (alist-get 'selection result)))
                                                    (should selection)
-                                                   (should (alist-get 'isEmpty selection))))))
-
-(ert-deftest claude-code-ide-test-mcp-get-open-editors ()
-  "Test the getOpenEditors tool implementation."
-  ;; Create some file buffers
-  (let ((test-files '())
-        (test-buffers '())
-        ;; Mock the function to ensure we're not in a project
-        (claude-code-ide-mcp--get-buffer-project-fn
-         (symbol-function 'claude-code-ide-mcp--get-buffer-project)))
-    (unwind-protect
-        (progn
-          ;; Mock to return nil (no project)
-          (fset 'claude-code-ide-mcp--get-buffer-project (lambda () nil))
-
-          ;; Create test files
-          (dotimes (i 2)
-            (let ((file (make-temp-file (format "claude-mcp-test-%d-" i))))
-              (push file test-files)
-              (push (find-file-noselect file) test-buffers)))
-
-          ;; Test listing
-          (let* ((result (claude-code-ide-mcp-handle-get-open-editors nil))
-                 (editors (alist-get 'editors result)))
-            ;; Should return an array
-            (should (vectorp editors))
-            ;; Should include our test files
-            (let ((paths (mapcar (lambda (e) (alist-get 'path e))
-                                 (append editors nil))))
-              (dolist (file test-files)
-                (should (member file paths))))))
-
-      ;; Cleanup
-      (fset 'claude-code-ide-mcp--get-buffer-project claude-code-ide-mcp--get-buffer-project-fn)
-      (dolist (buffer test-buffers)
-        (kill-buffer buffer))
-      (dolist (file test-files)
-        (delete-file file)))))
-
-(ert-deftest claude-code-ide-test-mcp-save-document ()
-  "Test the saveDocument tool implementation."
-  (claude-code-ide-mcp-tests--with-temp-file test-file "Initial content"
-                                             (with-current-buffer (find-file-noselect test-file)
-                                               ;; Modify buffer
-                                               (goto-char (point-max))
-                                               (insert "\nNew line")
-                                               ;; Save using tool
-                                               (let ((result (claude-code-ide-mcp-handle-save-document `((path . ,test-file)))))
-                                                 ;; Handler returns VS Code format
-                                                 (should (listp result))
-                                                 (let ((first-item (car result)))
-                                                   (should (equal (alist-get 'type first-item) "text"))
-                                                   (should (equal (alist-get 'text first-item) "DOCUMENT_SAVED")))
-                                                 (should-not (buffer-modified-p)))
-                                               (kill-buffer)))
-
-  ;; Test missing path
-  (should-error (claude-code-ide-mcp-handle-save-document '())
-                :type 'mcp-error))
+                                                   ;; No selection: start and end should be equal (cursor position)
+                                                   (should (equal (alist-get 'start selection) (alist-get 'end selection)))
+                                                   ;; Should not contain isEmpty or fileUrl
+                                                   (should-not (assq 'isEmpty selection))
+                                                   (should-not (assq 'fileUrl result))))))
 
 (ert-deftest claude-code-ide-test-mcp-close-tab ()
   "Test the close_tab tool implementation."
@@ -1460,12 +1538,12 @@ have completed before cleanup.  Waits up to 5 seconds."
 (ert-deftest claude-code-ide-test-mcp-tool-registry ()
   "Test that all tools are properly registered."
   ;; Build expected tools list dynamically based on configuration
-  (let* ((base-tools '("openFile" "getCurrentSelection" "getOpenEditors"
-                       "getWorkspaceFolders" "getDiagnostics" "saveDocument"
-                       "close_tab" "checkDocumentDirty"))
+  (let* ((base-tools '("openFile" "getDiagnostics" "close_tab"))
          (diff-tools (when (bound-and-true-p claude-code-ide-use-ide-diff)
                        '("openDiff" "closeAllDiffTabs")))
-         (expected-tools (append base-tools diff-tools)))
+         (exec-tools (when (bound-and-true-p claude-code-ide-enable-execute-code)
+                       '("executeCode")))
+         (expected-tools (append base-tools diff-tools exec-tools)))
     ;; Rebuild tool lists to match current configuration
     (setq claude-code-ide-mcp-tools (claude-code-ide-mcp--build-tool-list))
     (setq claude-code-ide-mcp-tool-schemas (claude-code-ide-mcp--build-tool-schemas))
@@ -1496,7 +1574,7 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should-not (alist-get "closeAllDiffTabs" claude-code-ide-mcp-tool-descriptions nil nil #'string=))
     ;; Verify other tools are still present
     (should (alist-get "openFile" claude-code-ide-mcp-tools nil nil #'string=))
-    (should (alist-get "getCurrentSelection" claude-code-ide-mcp-tools nil nil #'string=)))
+    (should (alist-get "getDiagnostics" claude-code-ide-mcp-tools nil nil #'string=)))
   ;; Test with ediff enabled
   (let ((claude-code-ide-use-ide-diff t))
     ;; Rebuild tool lists with ediff enabled
@@ -1510,6 +1588,38 @@ have completed before cleanup.  Waits up to 5 seconds."
     (should (alist-get "closeAllDiffTabs" claude-code-ide-mcp-tool-schemas nil nil #'string=))
     (should (alist-get "openDiff" claude-code-ide-mcp-tool-descriptions nil nil #'string=))
     (should (alist-get "closeAllDiffTabs" claude-code-ide-mcp-tool-descriptions nil nil #'string=))))
+
+(ert-deftest claude-code-ide-test-execute-code-flag ()
+  "Test that executeCode tool is excluded when flag is nil and included when t."
+  (let ((claude-code-ide-enable-execute-code nil))
+    (setq claude-code-ide-mcp-tools (claude-code-ide-mcp--build-tool-list))
+    (setq claude-code-ide-mcp-tool-schemas (claude-code-ide-mcp--build-tool-schemas))
+    (setq claude-code-ide-mcp-tool-descriptions (claude-code-ide-mcp--build-tool-descriptions))
+    (should-not (alist-get "executeCode" claude-code-ide-mcp-tools nil nil #'string=))
+    (should-not (alist-get "executeCode" claude-code-ide-mcp-tool-schemas nil nil #'string=))
+    (should-not (alist-get "executeCode" claude-code-ide-mcp-tool-descriptions nil nil #'string=)))
+  (let ((claude-code-ide-enable-execute-code t))
+    (setq claude-code-ide-mcp-tools (claude-code-ide-mcp--build-tool-list))
+    (setq claude-code-ide-mcp-tool-schemas (claude-code-ide-mcp--build-tool-schemas))
+    (setq claude-code-ide-mcp-tool-descriptions (claude-code-ide-mcp--build-tool-descriptions))
+    (should (alist-get "executeCode" claude-code-ide-mcp-tools nil nil #'string=))
+    (should (alist-get "executeCode" claude-code-ide-mcp-tool-schemas nil nil #'string=))
+    (should (alist-get "executeCode" claude-code-ide-mcp-tool-descriptions nil nil #'string=))))
+
+(ert-deftest claude-code-ide-test-execute-code-handler ()
+  "Test the executeCode handler."
+  ;; Simple expression
+  (let ((result (claude-code-ide-mcp-handle-execute-code '((code . "(+ 1 2)")))))
+    (should (equal (alist-get 'text (car result)) "3")))
+  ;; String result
+  (let ((result (claude-code-ide-mcp-handle-execute-code '((code . "(concat \"hello\" \" world\")")))))
+    (should (equal (alist-get 'text (car result)) "\"hello world\"")))
+  ;; Missing code parameter
+  (should-error (claude-code-ide-mcp-handle-execute-code '())
+                :type 'mcp-error)
+  ;; Evaluation error
+  (should-error (claude-code-ide-mcp-handle-execute-code '((code . "(error \"boom\")")))
+                :type 'mcp-error))
 
 (ert-deftest claude-code-ide-test-mcp-server-lifecycle ()
   "Test MCP server start and stop."
@@ -1535,6 +1645,22 @@ have completed before cleanup.  Waits up to 5 seconds."
             (should-not (file-exists-p (claude-code-ide-mcp--lockfile-path port)))))
       ;; Ensure cleanup
       (claude-code-ide-mcp-stop))))
+
+(ert-deftest claude-code-ide-test-ide-connected-notification ()
+  "Test that ide_connected notification stores the CLI PID."
+  (require 'claude-code-ide-mcp)
+  (let* ((session (make-claude-code-ide-session
+                   :session-id "test-ide-connected"
+                   :server nil :client nil :port 12345
+                   :directory "/tmp/test"
+                   :deferred (make-hash-table :test 'equal)
+                   :ping-timer nil :selection-timer nil
+                   :last-selection nil :cli-pid nil))
+         (message '((method . "ide_connected")
+                    (params . ((pid . 42))))))
+    ;; Simulate the dispatch
+    (claude-code-ide-mcp--handle-message message session)
+    (should (= (claude-code-ide-session-cli-pid session) 42))))
 
 ;; Test for side window handling in openDiff
 (defvar claude-code-ide-debug-buffer)
@@ -1684,33 +1810,6 @@ have completed before cleanup.  Waits up to 5 seconds."
       (let ((diags (claude-code-ide-diagnostics-get-all (current-buffer))))
         ;; Should use flycheck when flycheck-mode is active
         (should (vectorp diags))))))
-
-(ert-deftest claude-code-ide-test-check-document-dirty ()
-  "Test checkDocumentDirty handler."
-  (require 'claude-code-ide-mcp-handlers)
-  ;; Test with a modified buffer
-  (with-temp-buffer
-    (setq buffer-file-name "/tmp/test-file.el")
-    (insert "test content")
-    (set-buffer-modified-p t)
-    (let ((result (claude-code-ide-mcp-handle-check-document-dirty
-                   '((filePath . "/tmp/test-file.el")))))
-      (should (eq (alist-get 'isDirty result) t))))
-  ;; Test with an unmodified buffer
-  (with-temp-buffer
-    (setq buffer-file-name "/tmp/test-file2.el")
-    (insert "test content")
-    (set-buffer-modified-p nil)
-    (let ((result (claude-code-ide-mcp-handle-check-document-dirty
-                   '((filePath . "/tmp/test-file2.el")))))
-      (should (eq (alist-get 'isDirty result) :json-false))))
-  ;; Test with a non-existent file
-  (let ((result (claude-code-ide-mcp-handle-check-document-dirty
-                 '((filePath . "/tmp/non-existent-file.el")))))
-    (should (eq (alist-get 'isDirty result) :json-false)))
-  ;; Test with missing filePath parameter
-  (should-error (claude-code-ide-mcp-handle-check-document-dirty '())
-                :type 'mcp-error))
 
 ;; Disabled due to ERT macro interaction with transient-mark-mode in batch mode
 ;; The handler works correctly (verified with direct testing) but the test fails

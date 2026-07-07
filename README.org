@@ -16,7 +16,7 @@ Claude Code IDE for Emacs provides native integration with Claude Code CLI throu
 ** Features
 
 - Automatic project detection and session management
-- Terminal integration with full color support using =vterm= or =eat=
+- Terminal integration with full color support using =vterm=, =eat=, or =ghostel=
 - MCP protocol implementation for IDE integration
 - Tool support for file operations, editor state, and workspace info
 - Extensible MCP tools server for accessing Emacs commands (xrefs, tree-sitter, project info, e.g.)
@@ -44,27 +44,27 @@ This deep integration means Claude Code understands your project context and can
 
 *** Active File Awareness
 #+CAPTION: Claude Code automatically knows which file you're currently viewing in Emacs
-#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/25053b5f1b8123eed5c3f00e8b3e9687ee33391d/screenshots/file.png">
+#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/fb517ac3700f92f8d5481f0bcf9fe4a3c26c91ab/screenshots/file.png">
 #+html: <p align="center"><i>Claude Code automatically knows which file you're currently viewing in Emacs</i></p>
 
 *** Code Selection Context
 #+CAPTION: Claude Code can access and work with selected text in your buffers
-#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/25053b5f1b8123eed5c3f00e8b3e9687ee33391d/screenshots/selection.png">
+#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/fb517ac3700f92f8d5481f0bcf9fe4a3c26c91ab/screenshots/selection.png">
 #+html: <p align="center"><i>Claude Code can access and work with selected text in your buffers</i></p>
 
 *** Advanced Diff View with Diagnostics
 #+CAPTION: Integrated ediff view for code changes, with Claude Code able to directly access diagnostic data (errors, warnings, etc.) from opened files
-#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/25053b5f1b8123eed5c3f00e8b3e9687ee33391d/screenshots/ediff_diag.png">
+#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/fb517ac3700f92f8d5481f0bcf9fe4a3c26c91ab/screenshots/ediff_diag.png">
 #+html: <p align="center"><i>Integrated ediff view for code changes, with Claude Code able to directly access diagnostic data (errors, warnings, etc.) from opened files</i></p>
 
 *** Automatic Text Mentions
 #+CAPTION: Automatically mention and reference selected text in Claude conversations
-#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/25053b5f1b8123eed5c3f00e8b3e9687ee33391d/screenshots/mentions.png">
+#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/fb517ac3700f92f8d5481f0bcf9fe4a3c26c91ab/screenshots/mentions.png">
 #+html: <p align="center"><i>Automatically mention and reference selected text in Claude conversations</i></p>
 
 *** Session Restoration
 #+CAPTION: Resume previous Claude Code conversations with the --resume flag
-#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/25053b5f1b8123eed5c3f00e8b3e9687ee33391d/screenshots/restore.png">
+#+html: <img src="https://github.com/manzaltu/claude-code-ide.el/blob/fb517ac3700f92f8d5481f0bcf9fe4a3c26c91ab/screenshots/restore.png">
 #+html: <p align="center"><i>Resume previous Claude Code conversations with the --resume flag</i></p>
 
 * Installation
@@ -73,7 +73,7 @@ This deep integration means Claude Code understands your project context and can
 
 - Emacs 28.1 or higher
 - Claude Code CLI installed and available in PATH
-- =vterm= or =eat= package (for terminal support)
+- =vterm=, =eat=, or =ghostel= package (for terminal support)
 
 ** Installing Claude Code CLI
 
@@ -190,7 +190,7 @@ This allows you to refine Claude's suggestions before they're applied, ensuring 
 | ~claude-code-ide-cli-debug~                     | Enable CLI debug mode (-d flag)             | ~nil~                                  |
 | ~claude-code-ide-cli-extra-flags~               | Additional CLI flags (e.g. "--model")       | ~""~                                   |
 | ~claude-code-ide-debug~                         | Enable debug logging                        | ~nil~                                  |
-| ~claude-code-ide-terminal-backend~              | Terminal backend (vterm or eat)             | ~'vterm~                               |
+| ~claude-code-ide-terminal-backend~              | Terminal backend (vterm/eat/ghostel)        | ~'vterm~                               |
 | ~claude-code-ide-vterm-anti-flicker~            | Enable vterm flicker reduction              | ~t~                                    |
 | ~claude-code-ide-vterm-render-delay~            | vterm render batching delay (seconds)       | ~0.005~                                |
 | ~claude-code-ide-terminal-initialization-delay~ | Initialization delay for terminals          | ~0.1~                                  |
@@ -198,7 +198,7 @@ This allows you to refine Claude's suggestions before they're applied, ensuring 
 | ~claude-code-ide-debug-buffer~                  | Buffer name for debug output                | ~"*claude-code-ide-debug*"~              |
 | ~claude-code-ide-use-side-window~               | Use side window vs regular buffer           | ~t~                                    |
 | ~claude-code-ide-window-side~                   | Side for Claude window                      | ~'right~                               |
-| ~claude-code-ide-window-width~                  | Width for side windows (left/right)         | ~90~                                   |
+| ~claude-code-ide-window-width~                  | Body width for side windows (left/right)    | ~100~                                  |
 | ~claude-code-ide-window-height~                 | Height for side windows (top/bottom)        | ~20~                                   |
 | ~claude-code-ide-focus-on-open~                 | Focus Claude window when opened             | ~t~                                    |
 | ~claude-code-ide-focus-claude-after-ediff~      | Focus Claude window after opening ediff     | ~t~                                    |
@@ -210,7 +210,9 @@ This allows you to refine Claude's suggestions before they're applied, ensuring 
 | ~claude-code-ide-mcp-server-port~               | Port for MCP tools server                   | ~nil~ (auto-select)                    |
 | ~claude-code-ide-mcp-server-tools~              | Alist of exposed Emacs functions            | ~nil~                                  |
 | ~claude-code-ide-diagnostics-backend~           | Diagnostics backend (auto/flycheck/flymake) | ~'auto~                                |
+| ~claude-code-ide-no-flicker~                    | Enable flicker-free terminal renderer       | ~nil~                                  |
 | ~claude-code-ide-prevent-reflow-glitch~         | Prevent terminal reflow glitch (bug #1422)  | ~t~                                    |
+| ~claude-code-ide-enable-execute-code~           | Allow model to evaluate Elisp in Emacs      | ~t~                                    |
 
 *** Side Window Configuration
 
@@ -250,17 +252,33 @@ Or, if you'd prefer to use a regular window:
 
 *** Terminal Backend Configuration
 
-Claude Code IDE supports both =vterm= and =eat= as terminal backends. By default, it uses =vterm=, but you can switch to =eat= if preferred:
+Claude Code IDE supports =vterm=, =eat=, and =ghostel= as terminal backends. By default, it uses =vterm=, but you can switch to another backend if preferred:
 
 #+begin_src emacs-lisp
 ;; Use eat instead of vterm
 (setq claude-code-ide-terminal-backend 'eat)
 
+;; Use ghostel instead of vterm
+(setq claude-code-ide-terminal-backend 'ghostel)
+
 ;; Or switch back to vterm (default)
 (setq claude-code-ide-terminal-backend 'vterm)
 #+end_src
 
-The =eat= backend is a pure Elisp terminal emulator that may work better in some environments where =vterm= compilation is problematic. Both backends provide full terminal functionality including color support and special key handling.
+The =eat= backend is a pure Elisp terminal emulator that may work better in some environments where =vterm= compilation is problematic. The =ghostel= backend uses Ghostel's terminal integration and requires a version that provides =ghostel-exec=. All backends provide full terminal functionality including color support and special key handling.
+
+**** Flicker-Free Renderer (Experimental)
+
+Claude Code includes an experimental alternative terminal renderer that eliminates flickering. To enable it:
+
+#+begin_src emacs-lisp
+(setq claude-code-ide-no-flicker t)
+#+end_src
+
+Note that with this renderer, normal Emacs buffer scrolling and search (=C-s=, =C-r=) will not work in the terminal buffer. Instead, use Claude Code's built-in keybindings:
+
+- =C-o j= / =C-o k= - Scroll up/down through the transcript
+- =C-o /= - Search the transcript
 
 **** vterm Rendering Optimization
 
@@ -299,7 +317,7 @@ Claude Code IDE adds custom keybindings to the terminal for easier interaction:
 | =M-RET=      | =claude-code-ide-insert-newline= | Insert a newline in the prompt       |
 | =C-<escape>= | =claude-code-ide-send-escape=    | Send escape key to cancel operations |
 
-These keybindings are automatically set up for both =vterm= and =eat= backends and only apply within Claude Code terminal buffers.
+These keybindings are automatically set up for =vterm=, =eat=, and =ghostel= backends and only apply within Claude Code terminal buffers.
 
 **** Terminal Reflow Glitch Prevention (Temporary)
 
@@ -323,6 +341,16 @@ Claude Code IDE supports both Flycheck and Flymake for code diagnostics. By defa
 ;; Or force a specific backend
 (setq claude-code-ide-diagnostics-backend 'flycheck)
 (setq claude-code-ide-diagnostics-backend 'flymake)
+#+end_src
+
+*** Elisp Code Execution
+
+Claude Code can evaluate Elisp expressions directly in your running Emacs session via the =executeCode= MCP tool. This is enabled by default.
+
+To disable it:
+
+#+begin_src emacs-lisp
+(setq claude-code-ide-enable-execute-code nil)
 #+end_src
 
 *** Custom Buffer Naming

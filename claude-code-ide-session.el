@@ -33,7 +33,8 @@ and the directory-keyed process/session-id hash tables."
   last-buffer       ; last active buffer for change detection
   deferred          ; hash-table of deferred responses
   active-diffs      ; hash-table of active ediff sessions
-  original-tab)     ; tab-bar tab where session was started
+  original-tab      ; tab-bar tab where session was started
+  cli-pid)          ; PID of the connected CLI process
 
 (defvar claude-code-ide--sessions (make-hash-table :test 'equal)
   "Hash table mapping session-id to `claude-code-ide-session' structs.
